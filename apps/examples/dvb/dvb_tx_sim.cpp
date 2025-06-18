@@ -57,7 +57,7 @@ using namespace ether;
 static constexpr unsigned ETHERNET_FRAME_SIZE = 2048;
 
 /// Maximum number of symbols in a slot, considering normal cyclic prefix.
-static constexpr size_t MAX_NOF_SYMBOLS = 16;
+static constexpr size_t MAX_SEND_SYMBOLS = 15;
 
 /// Depending on configured compression parameters one UL U-Plane message may occupy up to 2 Ethernet packets.
 static constexpr size_t MAX_NOF_PACKETS_PER_UPLANE_MESSAGE = 100;
@@ -125,7 +125,7 @@ typedef struct dvb_transport_extend_header_t {
 using symbol_buffer = static_vector<std::vector<uint8_t>, MAX_NOF_PACKETS_PER_UPLANE_MESSAGE>;
 
 /// Array of symbol buffers, representing symbols of one eAxC.
-using eaxc_buffers = static_vector<symbol_buffer, MAX_NOF_SYMBOLS>;
+using eaxc_buffers = static_vector<symbol_buffer, MAX_SEND_SYMBOLS>;
 
 /// Aggregates information received in a message from DU.
 struct rx_message_info {
@@ -393,7 +393,7 @@ public:
     uint8_t symbol = symbol_point.get_symbol_index();
     // send one symbol date
     // Set correct header parameters and send UL U-Plane packets for each symbol.
-    if (symbol >= MAX_NOF_SYMBOLS - 1) {
+    if (symbol >= MAX_SEND_SYMBOLS - 1) {
       return;
     }
     if (symbol >= eaxc_frames.size()) {
@@ -542,11 +542,11 @@ private:
 
     // Initializes IQ data and Ethernet packet headers (timestamp and sequence index
     // will be updated on every transmission).
-    unsigned nof_frames_persymbol = nof_frames / (MAX_NOF_SYMBOLS - 1);
-    unsigned left_frame = nof_frames - nof_frames_persymbol * (MAX_NOF_SYMBOLS - 1);
+    unsigned nof_frames_persymbol = nof_frames / (MAX_SEND_SYMBOLS - 1);
+    unsigned left_frame = nof_frames - nof_frames_persymbol * (MAX_SEND_SYMBOLS - 1);
 
     unsigned start_prb = 0;
-    for (unsigned symbol = 0, end = MAX_NOF_SYMBOLS - 1; symbol != end; ++symbol) {
+    for (unsigned symbol = 0, end = MAX_SEND_SYMBOLS - 1; symbol != end; ++symbol) {
       eaxc_frames.emplace_back();
       auto& symbol_frames = eaxc_frames.back();
       unsigned max_frames = nof_frames_persymbol + ((left_frame > 1) ? 1 : 0);
