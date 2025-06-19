@@ -45,6 +45,12 @@
 #include <arpa/inet.h>
 #include <random>
 #include <srsran/adt/to_array.h>
+#include <fcntl.h>   // For open, O_RDONLY, O_NONBLOCK
+#include <sys/stat.h> // For mkfifo
+#include <sys/types.h> // For open, mkfifo
+#include <unistd.h>  // For read, close, unlink
+#include <errno.h>   // For errno
+
 #ifdef DPDK_FOUND
 #include "srsran/hal/dpdk/dpdk_eal_factory.h"
 #endif
@@ -278,7 +284,8 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
   kpi_counter dropped_counter;
   std::unique_ptr<ether::frame_builder>     eth_builder;
 
-  std::ifstream input_stream;
+  int video_tunnel_in;
+  int video_tunnel_out;
   bool need_save_frame;
   bool start_save_frame;
   std::unique_ptr<dvb_frame_writer> frame_writer;
@@ -296,7 +303,8 @@ public:
     save_executor(save_executor_),
     transceiver(transceiver_),
     cfg(cfg_),
-    input_stream(cfg_.input_file, std::ios::binary),
+    video_tunnel_in(0),
+    video_tunnel_out(0),
     need_save_frame(false),
     start_save_frame(false)
   {
@@ -312,18 +320,33 @@ public:
     } else {
       eth_builder = ether::create_frame_builder(ether_params);
     }
+    const char* video_tunnel_in_fifo_name = "/tmp/video_tunnel_in";
 
-    if (input_stream.is_open()) {
-      logger.info("open {} successful", cfg_.input_file);
-    } else {
-      logger.info("failed to open {}", cfg_.input_file);
+    if (mkfifo(video_tunnel_in_fifo_name, 0666) == -1 && errno != EEXIST) {
+      logger.error("failed to create video fifo");
     }
+    video_tunnel_in = open(video_tunnel_in_fifo_name, O_RDONLY | O_NONBLOCK);
+    if (video_tunnel_in == -1) {
+      logger.error("Failed to open video tunnel out");      
+    } else {
+      logger.info("open video tunnel in successful");
+    }
+
+    const char* video_tunnel_out_fifo_name = "/tmp/video_tunnel_out";
+    if (mkfifo(video_tunnel_out_fifo_name, 0666) == -1 && errno != EEXIST) {
+      logger.error("failed to create video fifo");
+    }
+    video_tunnel_out = open(video_tunnel_out_fifo_name, O_WRONLY);
+    if (video_tunnel_out == -1) {
+      logger.error("Failed to open video tunnel out");      
+    } else {
+      logger.info("open video tunnel out successful");
+    }     
   }
 
   // See interface for documentation.
   void on_new_frame(unique_rx_buffer buffer) override
   {
-    static unsigned seq_id = 0;
     span<const uint8_t> payload = buffer.data();
     auto decoded_message_info = decode_rx_message(payload, logger);
     if (!decoded_message_info.has_value()) {
@@ -340,37 +363,21 @@ public:
     rx_total_counter.increment();
     auto message_info = decoded_message_info.value();
 
-    if (need_save_frame && message_info.start_prb == 0 && ((message_info.frame_id & 1) == 0) && !start_save_frame) {
-      start_save_frame = true;
-      std::string output_file("dvb_frame_");
-      output_file += generate_time_format() + ".bin";
-      frame_writer = std::make_unique<dvb_frame_writer>(output_file, logger);
-    }
-    if (start_save_frame) {
-      if (seq_id != message_info.seq_id) {
-        dropped_counter.increment(message_info.seq_id - seq_id);
-        seq_id = message_info.seq_id;
-      }
-      seq_id++;
-    }
-
-    if (message_info.end_of_frame) {
-      seq_id = 0;
-    }
-
-    if (start_save_frame) {
+    span<const uint8_t> frame1 = buffer.data().subspan(message_info.offset, buffer.data().size() - message_info.offset);
+    const unsigned char* header1 = frame1.data();
+    if (header1[0] == 'A' && header1[1] == 'B' && header1[2] == 'C' && header1[3] == 'D') {
       if (!save_executor.defer([this, message_info, b = std::move(buffer)] {
-        if (start_save_frame) {
-          span<const uint8_t> frame = b.data().subspan(message_info.offset, b.data().size() - message_info.offset);
-          if (frame_writer->write_frame(message_info, frame) < 0) {
-              start_save_frame = false;
-              need_save_frame = false;
-          }
+        span<const uint8_t> frame = b.data().subspan(message_info.offset, b.data().size() - message_info.offset);
+        const unsigned char* header = frame.data();
+        uint32_t size = *(const uint32_t*)&header[4];
+        // logger.info("received payload size {}", );
+        if (write(video_tunnel_out, frame.data() + 8 , size ) == -1) {
+          logger.error("fail to write to video out channel");
         }
       })) {
         logger.warning("failed to dispatch frame writer task");
       }
-    }
+   }
   }
 
   void on_new_symbol(dvb_slot_symbol_point symbol_point) override
@@ -514,10 +521,14 @@ private:
 
     // Prepare IQ data.
     char* data_buf = (char*)frame.subspan(header_size + dvb_header_size, data_size).data();
-    input_stream.read(data_buf, data_size);
-    if(input_stream.eof()) {
-      input_stream.clear();
-      input_stream.seekg(0);
+    ssize_t bytes_read = read(video_tunnel_in, data_buf + 8, data_size - 8);
+    if (bytes_read >0) {
+      // logger.info("read {} bytes from video tunnel", bytes_read);
+      data_buf[0] = 'A';
+      data_buf[1] = 'B';
+      data_buf[2] = 'C';
+      data_buf[3] = 'D';
+      *(uint32_t*)&data_buf[4] = bytes_read;
     }
   }
 

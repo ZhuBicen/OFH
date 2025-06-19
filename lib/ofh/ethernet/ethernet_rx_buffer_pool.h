@@ -38,7 +38,7 @@ namespace ether {
 class ethernet_rx_buffer_pool
 {
   /// Allocate 4MB of storage, evenly divided between Ethernet receive buffers.
-  static inline constexpr units::bytes ETH_BUFFER_POOL_SIZE{4096000};
+  static inline constexpr units::bytes ETH_BUFFER_POOL_SIZE{40960000};
 
   using rx_buffer_id_list =
       concurrent_queue<unsigned, concurrent_queue_policy::lockfree_mpmc, concurrent_queue_wait_policy::non_blocking>;
