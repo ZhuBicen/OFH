@@ -43,13 +43,13 @@
 #include "srsran/support/signal_handling.h"
 #include "fmt/chrono.h"
 #include <arpa/inet.h>
+#include <errno.h> // For errno
+#include <fcntl.h> // For open, O_RDONLY, O_NONBLOCK
 #include <random>
 #include <srsran/adt/to_array.h>
-#include <fcntl.h>   // For open, O_RDONLY, O_NONBLOCK
-#include <sys/stat.h> // For mkfifo
+#include <sys/stat.h>  // For mkfifo
 #include <sys/types.h> // For open, mkfifo
-#include <unistd.h>  // For read, close, unlink
-#include <errno.h>   // For errno
+#include <unistd.h>    // For read, close, unlink
 
 #ifdef DPDK_FOUND
 #include "srsran/hal/dpdk/dpdk_eal_factory.h"
@@ -240,6 +240,48 @@ class dvb_frame_writer {
     }
 };
 
+static bool change_fifo_buffer_size(int fd)
+{
+  long current_size;
+  // 3. Get the current pipe buffer size (optional, for verification)
+  int ret = fcntl(fd, F_GETPIPE_SZ);
+  if (ret == -1) {
+    perror("fcntl F_GETPIPE_SZ");
+    // Don't exit, as setting might still work even if getting fails (less common)
+    fprintf(stderr, "Could not get current pipe size. Error: %s\n", strerror(errno));
+    current_size = -1; // Indicate failure
+  } else {
+    current_size = (long)ret;
+    fprintf(stderr, "Current pipe buffer size: %ld bytes\n", current_size);
+  }
+#define DESIRED_PIPE_SIZE (40 * 1024 * 1024) // 4 MB
+  // 4. Set the new pipe buffer size
+  fprintf(stderr, "Attempting to set pipe buffer size to %d bytes...\n", DESIRED_PIPE_SIZE);
+  ret = fcntl(fd, F_SETPIPE_SZ, DESIRED_PIPE_SIZE);
+  if (ret == -1) {
+    perror("fcntl F_SETPIPE_SZ");
+    fprintf(stderr, "Failed to set pipe size. Error: %s\n", strerror(errno));
+    fprintf(stderr, "Possible reasons:\n");
+    fprintf(stderr,
+            "  - Desired size exceeds /proc/sys/fs/pipe-max-size (%ld bytes on my system).\n",
+            current_size); // current_size might be wrong if F_GETPIPE_SZ failed
+    fprintf(stderr, "  - Insufficient privileges (need CAP_SYS_RESOURCE if exceeding limits).\n");
+  } else {
+    fprintf(stderr, "fcntl F_SETPIPE_SZ returned %d. (This is often the actual size set by kernel)\n", ret);
+    fprintf(stderr, "New pipe buffer size set successfully to approximately %d bytes.\n", ret);
+  }
+
+  // 5. Verify the new size (optional)
+  ret = fcntl(fd, F_GETPIPE_SZ);
+  if (ret == -1) {
+    perror("fcntl F_GETPIPE_SZ (after set)");
+    fprintf(stderr, "Could not verify new pipe size. Error: %s\n", strerror(errno));
+    return false;
+  } else {
+    fprintf(stderr, "Verified actual new pipe buffer size: %ld bytes\n", (long)ret);
+    return true;
+  }
+}
 /// RU emulator receives OFH traffic and replies with UL packets to a DU.
 class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
 {
@@ -334,13 +376,19 @@ public:
 
     const char* video_tunnel_out_fifo_name = "/tmp/video_tunnel_out";
     if (mkfifo(video_tunnel_out_fifo_name, 0666) == -1 && errno != EEXIST) {
-      logger.error("failed to create video fifo");
+      logger.error("failed to create video out fifo. Error: {}", strerror(errno));
+      return;
     }
-    video_tunnel_out = open(video_tunnel_out_fifo_name, O_WRONLY);
+    while (true) {
+      video_tunnel_out = open(video_tunnel_out_fifo_name, O_WRONLY | O_NONBLOCK);
     if (video_tunnel_out == -1) {
-      logger.error("Failed to open video tunnel out");      
-    } else {
+        logger.warning("Retrying to open video tunnel out. Error: {}", strerror(errno));
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        continue;
+      }
       logger.info("open video tunnel out successful");
+      change_fifo_buffer_size(video_tunnel_out);
+      break;
     }     
   }
 
@@ -367,11 +415,11 @@ public:
     const unsigned char* header1 = frame1.data();
     if (header1[0] == 'A' && header1[1] == 'B' && header1[2] == 'C' && header1[3] == 'D') {
       if (!save_executor.defer([this, message_info, b = std::move(buffer)] {
-        span<const uint8_t> frame = b.data().subspan(message_info.offset, b.data().size() - message_info.offset);
+            span<const uint8_t>  frame  = b.data().subspan(message_info.offset, b.data().size() - message_info.offset);
         const unsigned char* header = frame.data();
-        uint32_t size = *(const uint32_t*)&header[4];
+            uint32_t             size   = *(const uint32_t*)&header[4];
         // logger.info("received payload size {}", );
-        if (write(video_tunnel_out, frame.data() + 8 , size ) == -1) {
+            if (write(video_tunnel_out, frame.data() + 8, size) == -1) {
           logger.error("fail to write to video out channel");
         }
       })) {
