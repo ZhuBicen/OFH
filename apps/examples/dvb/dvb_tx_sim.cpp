@@ -254,7 +254,7 @@ static bool change_fifo_buffer_size(int fd)
     current_size = (long)ret;
     fprintf(stderr, "Current pipe buffer size: %ld bytes\n", current_size);
   }
-#define DESIRED_PIPE_SIZE (40 * 1024 * 1024) // 4 MB
+#define DESIRED_PIPE_SIZE (4 * 1024 * 1024) // 4 MB
   // 4. Set the new pipe buffer size
   fprintf(stderr, "Attempting to set pipe buffer size to %d bytes...\n", DESIRED_PIPE_SIZE);
   ret = fcntl(fd, F_SETPIPE_SZ, DESIRED_PIPE_SIZE);
@@ -416,7 +416,7 @@ public:
     if (header1[0] == 'A' && header1[1] == 'B' && header1[2] == 'C' && header1[3] == 'D') {
       if (!save_executor.defer([this, message_info, b = std::move(buffer)] {
             span<const uint8_t>  frame  = b.data().subspan(message_info.offset, b.data().size() - message_info.offset);
-        const unsigned char* header = frame.data();
+            const unsigned char* header = frame.data();
             uint32_t             size   = *(const uint32_t*)&header[4];
         // logger.info("received payload size {}", );
             if (write(video_tunnel_out, frame.data() + 8, size) == -1) {
