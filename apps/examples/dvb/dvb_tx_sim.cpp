@@ -50,6 +50,7 @@
 #include <sys/stat.h>  // For mkfifo
 #include <sys/types.h> // For open, mkfifo
 #include <unistd.h>    // For read, close, unlink
+#include <signal.h>
 
 #ifdef DPDK_FOUND
 #include "srsran/hal/dpdk/dpdk_eal_factory.h"
@@ -327,7 +328,6 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
   std::unique_ptr<ether::frame_builder>     eth_builder;
 
   int video_tunnel_in;
-  int video_tunnel_out;
   bool need_save_frame;
   bool start_save_frame;
   std::unique_ptr<dvb_frame_writer> frame_writer;
@@ -346,7 +346,6 @@ public:
     transceiver(transceiver_),
     cfg(cfg_),
     video_tunnel_in(0),
-    video_tunnel_out(0),
     need_save_frame(false),
     start_save_frame(false)
   {
@@ -373,25 +372,24 @@ public:
     } else {
       logger.info("open video tunnel in successful");
     }
-
+  }
+  static int video_tunnel_out;
+  static bool open_video_tunnel_out(srslog::basic_logger& logger)
+  {
     const char* video_tunnel_out_fifo_name = "/tmp/video_tunnel_out";
     if (mkfifo(video_tunnel_out_fifo_name, 0666) == -1 && errno != EEXIST) {
-      logger.error("failed to create video out fifo. Error: {}", strerror(errno));
-      return;
+      logger.error("failed to create video out fifo. Error {}", strerror(errno));
+      return false;
     }
-    while (true) {
-      video_tunnel_out = open(video_tunnel_out_fifo_name, O_WRONLY | O_NONBLOCK);
+    video_tunnel_out = open(video_tunnel_out_fifo_name, O_WRONLY | O_NONBLOCK);
     if (video_tunnel_out == -1) {
-        logger.warning("Retrying to open video tunnel out. Error: {}", strerror(errno));
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        continue;
-      }
-      logger.info("open video tunnel out successful");
-      change_fifo_buffer_size(video_tunnel_out);
-      break;
-    }     
-  }
-
+      logger.warning("Failed to open out video tunnel. Error: {}", strerror(errno));
+      return false;
+    }
+    logger.info("open video tunnel out successful");
+    change_fifo_buffer_size(video_tunnel_out);
+    return true;
+  }  
   // See interface for documentation.
   void on_new_frame(unique_rx_buffer buffer) override
   {
@@ -418,14 +416,17 @@ public:
             span<const uint8_t>  frame  = b.data().subspan(message_info.offset, b.data().size() - message_info.offset);
             const unsigned char* header = frame.data();
             uint32_t             size   = *(const uint32_t*)&header[4];
-        // logger.info("received payload size {}", );
-            if (write(video_tunnel_out, frame.data() + 8, size) == -1) {
-          logger.error("fail to write to video out channel");
-        }
-      })) {
+            // logger.info("received payload size {}", );
+            if (video_tunnel_out == -1) {
+              open_video_tunnel_out(logger);
+            }
+            if (video_tunnel_out != -1 && write(video_tunnel_out, frame.data() + 8, size) == -1) {
+              logger.error("fail to write to out video channel");
+            }
+          })) {
         logger.warning("failed to dispatch frame writer task");
       }
-   }
+    }
   }
 
   void on_new_symbol(dvb_slot_symbol_point symbol_point) override
@@ -647,6 +648,8 @@ private:
   }
 };
 
+int dvb_tx_sim::video_tunnel_out = -1;
+
 /// Manages the workers of the RU emulators.
 struct worker_manager {
   static constexpr uint32_t task_worker_queue_size = 1024;
@@ -767,8 +770,16 @@ static void cleanup_signal_handler()
   srslog::flush();
 }
 
+void sigpipe_handler(int signo) {
+  fprintf(stderr, "SIGPIPE received: Reader closed FIFO.\n");
+  dvb_tx_sim::video_tunnel_out = -1;
+  // You might want to set a flag or perform cleanup here
+  // For this example, we'll just print a message.
+}
+
 int main(int argc, char** argv)
 {
+  ::signal(SIGPIPE, sigpipe_handler);
   // Set interrupt and cleanup signal handlers.
   register_interrupt_signal_handler(interrupt_signal_handler);
   register_cleanup_signal_handler(cleanup_signal_handler);
@@ -843,6 +854,7 @@ int main(int argc, char** argv)
     transceivers.push_back(std::make_unique<socket_transceiver>(logger, *workers.dvb_rx_exec[0], cfg));
   }
 
+  dvb_tx_sim::open_video_tunnel_out(logger);
   dvb_tx_sim_config emu_cfg;
 
   emu_cfg.nof_prb = MAX_DVB_FRAME_SIZE / 4;
