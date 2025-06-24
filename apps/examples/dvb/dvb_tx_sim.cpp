@@ -255,7 +255,7 @@ static bool change_fifo_buffer_size(int fd)
     current_size = (long)ret;
     fprintf(stderr, "Current pipe buffer size: %ld bytes\n", current_size);
   }
-#define DESIRED_PIPE_SIZE (4 * 1024 * 1024) // 4 MB
+#define DESIRED_PIPE_SIZE (10 * 1024 * 1024) // 4 MB
   // 4. Set the new pipe buffer size
   fprintf(stderr, "Attempting to set pipe buffer size to %d bytes...\n", DESIRED_PIPE_SIZE);
   ret = fcntl(fd, F_SETPIPE_SZ, DESIRED_PIPE_SIZE);
@@ -325,6 +325,11 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
   kpi_counter tx_total_counter;
   kpi_counter corrupt_counter;
   kpi_counter dropped_counter;
+
+  kpi_counter tx_video_total_counter;
+  kpi_counter rx_video_total_counter;
+  kpi_counter failed_render_counter;
+
   std::unique_ptr<ether::frame_builder>     eth_builder;
 
   int video_tunnel_in;
@@ -361,16 +366,22 @@ public:
     } else {
       eth_builder = ether::create_frame_builder(ether_params);
     }
-    const char* video_tunnel_in_fifo_name = "/tmp/video_tunnel_in";
+    open_video_tunnel_in();
+  }
 
+  bool open_video_tunnel_in() {
+    const char* video_tunnel_in_fifo_name = "/tmp/video_tunnel_in";
     if (mkfifo(video_tunnel_in_fifo_name, 0666) == -1 && errno != EEXIST) {
       logger.error("failed to create video fifo");
+      return false;
     }
     video_tunnel_in = open(video_tunnel_in_fifo_name, O_RDONLY | O_NONBLOCK);
     if (video_tunnel_in == -1) {
-      logger.error("Failed to open video tunnel out");      
+      logger.error("Failed to open video tunnel out");
+      return false;      
     } else {
-      logger.info("open video tunnel in successful");
+      // logger.info("open video tunnel in as reader successful: {}", video_tunnel_in);
+      return true;
     }
   }
   static int video_tunnel_out;
@@ -383,7 +394,7 @@ public:
     }
     video_tunnel_out = open(video_tunnel_out_fifo_name, O_WRONLY | O_NONBLOCK);
     if (video_tunnel_out == -1) {
-      logger.warning("Failed to open out video tunnel. Error: {}", strerror(errno));
+      // logger.warning("Failed to open out video tunnel. Error: {}", strerror(errno));
       return false;
     }
     logger.info("open video tunnel out successful");
@@ -417,11 +428,13 @@ public:
             const unsigned char* header = frame.data();
             uint32_t             size   = *(const uint32_t*)&header[4];
             // logger.info("received payload size {}", );
+            rx_video_total_counter.increment();
             if (video_tunnel_out == -1) {
               open_video_tunnel_out(logger);
             }
             if (video_tunnel_out != -1 && write(video_tunnel_out, frame.data() + 8, size) == -1) {
-              logger.error("fail to write to out video channel");
+              failed_render_counter.increment();
+              // logger.error("fail to write to out video channel");
             }
           })) {
         logger.warning("failed to dispatch frame writer task");
@@ -492,15 +505,18 @@ public:
     uint64_t tx_total  = tx_total_counter.get_value();
     uint64_t malformed = corrupt_counter.get_value();
     uint64_t dropped   = dropped_counter.get_value();
+    uint64_t tx_video_total = tx_video_total_counter.get_value();
+    uint64_t rx_video_total = rx_video_total_counter.get_value();
+
 
     fmt::format_to(buffer,
-                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} |\n",
+                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | \n",
                    current_time,
                    emu_id,
                    rx_total,
                    malformed,
                    dropped,
-                   tx_total);
+                   tx_total, tx_video_total, rx_video_total, failed_render_counter.get_value());
 
     fmt::print(to_c_str(buffer));
   }
@@ -571,13 +587,18 @@ private:
     // Prepare IQ data.
     char* data_buf = (char*)frame.subspan(header_size + dvb_header_size, data_size).data();
     ssize_t bytes_read = read(video_tunnel_in, data_buf + 8, data_size - 8);
-    if (bytes_read >0) {
+    if (bytes_read > 0) {
       // logger.info("read {} bytes from video tunnel", bytes_read);
       data_buf[0] = 'A';
       data_buf[1] = 'B';
       data_buf[2] = 'C';
       data_buf[3] = 'D';
       *(uint32_t*)&data_buf[4] = bytes_read;
+      tx_video_total_counter.increment();
+    } else if (bytes_read == 0) {
+      // EOF, should open again
+      close(video_tunnel_in);
+      open_video_tunnel_in();
     }
   }
 
