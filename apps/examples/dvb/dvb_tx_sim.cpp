@@ -152,6 +152,51 @@ enum class decoder_error_codes { drop, corrupt };
 
 } // namespace
 
+
+
+// CRC-32 polynomial (IEEE 802.3)
+#define CRC32_POLYNOMIAL 0xEDB88320UL // Reflected polynomial
+
+// CRC lookup table
+static uint32_t crc32_table[256];
+static int crc32_table_initialized = 0;
+
+// Function to initialize the CRC-32 lookup table
+void init_crc32_table() {
+    if (crc32_table_initialized) {
+        return; // Already initialized
+    }
+
+    uint32_t polynomial = CRC32_POLYNOMIAL;
+    for (int i = 0; i < 256; i++) {
+        uint32_t crc = i;
+        for (int j = 0; j < 8; j++) {
+            if (crc & 1) {
+                crc = (crc >> 1) ^ polynomial;
+            } else {
+                crc = (crc >> 1);
+            }
+        }
+        crc32_table[i] = crc;
+    }
+    crc32_table_initialized = 1;
+}
+
+// Function to calculate CRC-32
+uint32_t calculate_crc32(const unsigned char *data, size_t length) {
+    if (!crc32_table_initialized) {
+        init_crc32_table();
+    }
+
+    uint32_t crc = 0xFFFFFFFFUL; // Initial value
+
+    for (size_t i = 0; i < length; i++) {
+        crc = (crc >> 8) ^ crc32_table[(crc ^ data[i]) & 0xFF];
+    }
+
+    return crc ^ 0xFFFFFFFFUL; // Final XOR value
+}
+
 namespace {
 
 /// Analyzes content of received OFH packets.
@@ -431,7 +476,10 @@ public:
             const unsigned char* header = frame.data();
             uint32_t             seq    = *(const uint32_t*)&header[4];
             uint32_t             size   = *(const uint32_t*)&header[8];
-
+            if (size + 16 > frame.size()) {
+              logger.error("video frame size is not valid, size {}, seq {}", frame.size(), seq);
+              return;
+            }
             if (!video_packet_recv_seq.has_value()) {
               *video_packet_recv_seq = seq;
             } else {
@@ -439,6 +487,17 @@ public:
                 logger.warning("lost some video packet, last {}, now {}", video_packet_recv_seq, seq);
               }
               video_packet_recv_seq = seq;
+            }
+            auto     crc  = calculate_crc32(frame.data() + 12, size);
+            uint32_t tail = size + 12;
+            if (*(const uint32_t*)&header[tail] != crc) {
+              logger.error("video frame is corrupt, size {}, seq {}, frame {}, start_prb {}, num_prb {}",
+                           frame.size(),
+                           seq,
+                           message_info.frame_id,
+                           message_info.start_prb,
+                           message_info.number_of_prbs);
+              return;
             }
 
             // logger.info("received payload size {}", );
@@ -599,23 +658,23 @@ private:
 
     set_static_header_params(frame_header, params);
 
-    if (last_pkg) {
-      return;
-    }
-    if (data_size < 12) {
+    if (last_pkg || data_size < 16) {
       return;
     }
     char* data_buf = (char*)frame.subspan(header_size + dvb_header_size, data_size).data();
-    ssize_t bytes_read = read(video_tunnel_in, data_buf + 12, data_size - 12);
+    ssize_t bytes_read = read(video_tunnel_in, data_buf + 12, data_size - 16);
     if (bytes_read > 0) {
       // logger.info("read {} bytes from video tunnel", bytes_read);
+      // header 12 bytes
       data_buf[0] = 'A';
       data_buf[1] = 'B';
       data_buf[2] = 'C';
       data_buf[3] = 'D';
       *(uint32_t*)&data_buf[4] = video_packet_send_seq++;
       *(uint32_t*)&data_buf[8] = bytes_read;
-
+      // 4 bytes trailer
+      auto crc = calculate_crc32((const unsigned char*)data_buf + 12, bytes_read);
+      *(uint32_t*)&data_buf[12 + bytes_read] = crc;
       tx_video_total_counter.increment();
     } else if (bytes_read == 0) {
       // EOF, should open again
