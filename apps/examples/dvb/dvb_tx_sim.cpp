@@ -64,7 +64,7 @@ using namespace ether;
 static constexpr unsigned ETHERNET_FRAME_SIZE = 2048;
 
 /// Maximum number of symbols in a slot, considering normal cyclic prefix.
-static constexpr size_t MAX_SEND_SYMBOLS = 15;
+static constexpr size_t MAX_SEND_SYMBOLS = 16;
 
 /// Depending on configured compression parameters one UL U-Plane message may occupy up to 2 Ethernet packets.
 static constexpr size_t MAX_NOF_PACKETS_PER_UPLANE_MESSAGE = 100;
@@ -255,7 +255,7 @@ static bool change_fifo_buffer_size(int fd)
     current_size = (long)ret;
     fprintf(stderr, "Current pipe buffer size: %ld bytes\n", current_size);
   }
-#define DESIRED_PIPE_SIZE (10 * 1024 * 1024) // 4 MB
+#define DESIRED_PIPE_SIZE (4 * 1024 * 1024) // 4 MB
   // 4. Set the new pipe buffer size
   fprintf(stderr, "Attempting to set pipe buffer size to %d bytes...\n", DESIRED_PIPE_SIZE);
   ret = fcntl(fd, F_SETPIPE_SZ, DESIRED_PIPE_SIZE);
@@ -385,6 +385,9 @@ public:
     }
   }
   static int video_tunnel_out;
+  uint32_t video_packet_send_seq = 0;
+  std::optional<uint32_t> video_packet_recv_seq;
+  
   static bool open_video_tunnel_out(srslog::basic_logger& logger)
   {
     const char* video_tunnel_out_fifo_name = "/tmp/video_tunnel_out";
@@ -426,13 +429,25 @@ public:
       if (!save_executor.defer([this, message_info, b = std::move(buffer)] {
             span<const uint8_t>  frame  = b.data().subspan(message_info.offset, b.data().size() - message_info.offset);
             const unsigned char* header = frame.data();
-            uint32_t             size   = *(const uint32_t*)&header[4];
+            uint32_t             seq    = *(const uint32_t*)&header[4];
+            uint32_t             size   = *(const uint32_t*)&header[8];
+
+            if (!video_packet_recv_seq.has_value()) {
+              *video_packet_recv_seq = seq;
+            } else {
+              if (seq != (*video_packet_recv_seq + 1) % UINT32_MAX) {
+                logger.warning("lost some video packet, last {}, now {}", video_packet_recv_seq, seq);
+              }
+              video_packet_recv_seq = seq;
+            }
+
             // logger.info("received payload size {}", );
             rx_video_total_counter.increment();
             if (video_tunnel_out == -1) {
               open_video_tunnel_out(logger);
+              failed_render_counter.increment();
             }
-            if (video_tunnel_out != -1 && write(video_tunnel_out, frame.data() + 8, size) == -1) {
+            if (video_tunnel_out != -1 && write(video_tunnel_out, frame.data() + 12, size) != size) {
               failed_render_counter.increment();
               // logger.error("fail to write to out video channel");
             }
@@ -584,16 +599,23 @@ private:
 
     set_static_header_params(frame_header, params);
 
-    // Prepare IQ data.
+    if (last_pkg) {
+      return;
+    }
+    if (data_size < 12) {
+      return;
+    }
     char* data_buf = (char*)frame.subspan(header_size + dvb_header_size, data_size).data();
-    ssize_t bytes_read = read(video_tunnel_in, data_buf + 8, data_size - 8);
+    ssize_t bytes_read = read(video_tunnel_in, data_buf + 12, data_size - 12);
     if (bytes_read > 0) {
       // logger.info("read {} bytes from video tunnel", bytes_read);
       data_buf[0] = 'A';
       data_buf[1] = 'B';
       data_buf[2] = 'C';
       data_buf[3] = 'D';
-      *(uint32_t*)&data_buf[4] = bytes_read;
+      *(uint32_t*)&data_buf[4] = video_packet_send_seq++;
+      *(uint32_t*)&data_buf[8] = bytes_read;
+
       tx_video_total_counter.increment();
     } else if (bytes_read == 0) {
       // EOF, should open again
