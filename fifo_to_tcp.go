@@ -184,6 +184,17 @@ func fileWriter(dataChannelToFile <-chan []byte, wg *sync.WaitGroup, stats *Chan
 
 	writer := bufio.NewWriter(file) // Use a buffered writer for efficiency
 
+	originVideoFilePath := "/home/systemci/Mission.Impossible.7.2023.2160p.HQ.WEB-DL.H265.DDP5.1.4Audios.mkv"
+	originVideoFile, err := os.OpenFile(originVideoFilePath, os.O_RDONLY, 0644)
+	if err == nil {
+		defer originVideoFile.Close()
+		fmt.Printf("Origin video file %s opened successfully for reading.\n", originVideoFilePath)
+	} else {
+		fmt.Printf("Error opening origin video file %s: %v\n", originVideoFilePath, err)
+	}
+
+
+	offset := uint64(0)
 	for {
 		select {
 		case data, ok := <-dataChannelToFile:
@@ -196,6 +207,23 @@ func fileWriter(dataChannelToFile <-chan []byte, wg *sync.WaitGroup, stats *Chan
 				return
 			}
 
+			originData := make([]byte, len(data))
+			originVideoFile.Seek(int64(offset), io.SeekStart)
+			originVideoFile.Read(originData) // Read data from origin video file at the current offset
+
+			// compare data with originData
+			if len(data) != len(originData) {
+				fmt.Printf("Data length mismatch: received %d bytes, expected %d bytes at offset %d\n", len(data), len(originData), offset)
+			} else {
+				for i := 0; i < len(data); i++ {
+					if data[i] != originData[i] {
+						fmt.Printf("Data mismatch at byte %d: received %d, expected %d at offset %d\n", i, data[i], originData[i], offset)
+						break // Only report the first mismatch
+					}
+				}
+			}
+
+			offset += uint64(len(data))
 			// Update buffered stats after receiving from channel
 			stats.mu.Lock()
 			if stats.fileBufferedMessages > 0 { // Ensure not to decrement below zero
