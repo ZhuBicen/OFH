@@ -436,6 +436,8 @@ public:
   static int video_tunnel_out;
   uint32_t video_packet_send_seq = 0;
   std::optional<uint32_t> video_packet_recv_seq = std::nullopt;
+  std::optional<rx_message_info> last_video_message_info = std::nullopt;
+
   // sequence id -> payload data
   std::map<uint32_t, std::vector<unsigned char>> video_packet_data;
   std::mutex video_packet_data_mutex;
@@ -489,11 +491,20 @@ public:
             }
             if (!video_packet_recv_seq.has_value()) {
               video_packet_recv_seq = seq;
+              last_video_message_info = message_info;
             } else {
               if (seq != (*video_packet_recv_seq + 1) % UINT32_MAX) {
-                logger.warning("lost some video packet, last {}, now {}", video_packet_recv_seq, seq);
+                logger.warning(
+                    "lost some video packet, last {}, frame {}, start_prb {} <==> now {}, frame {}, start_prb {}",
+                    video_packet_recv_seq,
+                    last_video_message_info->frame_id,
+                    last_video_message_info->start_prb,
+                    seq,
+                    message_info.frame_id,
+                    message_info.start_prb);
               }
               video_packet_recv_seq = seq;
+              last_video_message_info = message_info;
             }
             auto     crc  = calculate_crc32(frame.data() + 12, size);
             uint32_t tail = size + 12;
