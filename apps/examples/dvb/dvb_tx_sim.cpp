@@ -434,7 +434,7 @@ public:
     }
   }
   static int video_tunnel_out;
-  uint32_t video_packet_send_seq = 1;
+  uint32_t video_packet_send_seq = 0;
   std::optional<uint32_t> video_packet_recv_seq = std::nullopt;
   std::optional<rx_message_info> last_video_message_info = std::nullopt;
 
