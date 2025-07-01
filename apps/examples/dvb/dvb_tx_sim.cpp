@@ -532,7 +532,7 @@ public:
               open_video_tunnel_out(logger);
               failed_render_counter.increment();
             }
-            if (video_tunnel_out != -1 && write(video_tunnel_out, frame.data() + 12, size) != size) {
+            if (video_tunnel_out != -1 && write(video_tunnel_out, video_payload, size) != size) {
               failed_render_counter.increment();
               // logger.error("fail to write to out video channel");
             }
