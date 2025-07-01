@@ -51,6 +51,7 @@
 #include <sys/types.h> // For open, mkfifo
 #include <unistd.h>    // For read, close, unlink
 #include <signal.h>
+#include <mutex>
 
 #ifdef DPDK_FOUND
 #include "srsran/hal/dpdk/dpdk_eal_factory.h"
@@ -374,6 +375,9 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
   kpi_counter tx_video_total_counter;
   kpi_counter rx_video_total_counter;
   kpi_counter failed_render_counter;
+  kpi_counter video_packet_size_mismatch_counter;
+  kpi_counter video_packet_content_mismatch_counter;
+  kpi_counter video_packet_received_not_found;
 
   std::unique_ptr<ether::frame_builder>     eth_builder;
 
@@ -431,7 +435,10 @@ public:
   }
   static int video_tunnel_out;
   uint32_t video_packet_send_seq = 0;
-  std::optional<uint32_t> video_packet_recv_seq;
+  std::optional<uint32_t> video_packet_recv_seq = std::nullopt;
+  // sequence id -> payload data
+  std::map<uint32_t, std::vector<unsigned char>> video_packet_data;
+  std::mutex video_packet_data_mutex;
   
   static bool open_video_tunnel_out(srslog::basic_logger& logger)
   {
@@ -481,7 +488,7 @@ public:
               return;
             }
             if (!video_packet_recv_seq.has_value()) {
-              *video_packet_recv_seq = seq;
+              video_packet_recv_seq = seq;
             } else {
               if (seq != (*video_packet_recv_seq + 1) % UINT32_MAX) {
                 logger.warning("lost some video packet, last {}, now {}", video_packet_recv_seq, seq);
@@ -499,7 +506,26 @@ public:
                            message_info.number_of_prbs);
               return;
             }
-
+            const unsigned char* video_payload = frame.data() + 12;
+            {
+              std::lock_guard<std::mutex> lock(video_packet_data_mutex);
+              if (auto it = video_packet_data.find(seq); it != video_packet_data.end()) {
+                auto origin_payload = video_packet_data[seq];
+                if (size != origin_payload.size()) {
+                  video_packet_size_mismatch_counter.increment();
+                } else {
+                  for (uint32_t i = 0; i < size; i++) {
+                    if (origin_payload[i] != video_payload[i]) {
+                      video_packet_content_mismatch_counter.increment();
+                      break;
+                    }
+                  }
+                }
+                video_packet_data.erase(seq);
+              } else {
+                video_packet_received_not_found.increment();
+              }
+            }
             // logger.info("received payload size {}", );
             rx_video_total_counter.increment();
             if (video_tunnel_out == -1) {
@@ -579,18 +605,24 @@ public:
     uint64_t tx_total  = tx_total_counter.get_value();
     uint64_t malformed = corrupt_counter.get_value();
     uint64_t dropped   = dropped_counter.get_value();
-    uint64_t tx_video_total = tx_video_total_counter.get_value();
-    uint64_t rx_video_total = rx_video_total_counter.get_value();
+    // uint64_t tx_video_total = tx_video_total_counter.get_value();
+    // uint64_t rx_video_total = rx_video_total_counter.get_value();
 
-
-    fmt::format_to(buffer,
-                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | \n",
-                   current_time,
-                   emu_id,
-                   rx_total,
-                   malformed,
-                   dropped,
-                   tx_total, tx_video_total, rx_video_total, failed_render_counter.get_value());
+    fmt::format_to(
+        buffer,
+        "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} |\n",
+        current_time,
+        emu_id,
+        rx_total,
+        malformed,
+        dropped,
+        tx_total,
+        video_packet_send_seq,
+        video_packet_recv_seq.has_value() ? *video_packet_recv_seq : 0,
+        failed_render_counter.get_value(),
+        video_packet_size_mismatch_counter.get_value(),
+        video_packet_content_mismatch_counter.get_value(),
+        video_packet_received_not_found.get_value());
 
     fmt::print(to_c_str(buffer));
   }
@@ -661,7 +693,7 @@ private:
     if (last_pkg || data_size < 16) {
       return;
     }
-    char* data_buf = (char*)frame.subspan(header_size + dvb_header_size, data_size).data();
+    unsigned char* data_buf = (unsigned char*)frame.subspan(header_size + dvb_header_size, data_size).data();
     ssize_t bytes_read = read(video_tunnel_in, data_buf + 12, data_size - 16);
     if (bytes_read > 0) {
       // logger.info("read {} bytes from video tunnel", bytes_read);
@@ -670,12 +702,18 @@ private:
       data_buf[1] = 'B';
       data_buf[2] = 'C';
       data_buf[3] = 'D';
-      *(uint32_t*)&data_buf[4] = video_packet_send_seq++;
+      *(uint32_t*)&data_buf[4] = video_packet_send_seq;
       *(uint32_t*)&data_buf[8] = bytes_read;
       // 4 bytes trailer
-      auto crc = calculate_crc32((const unsigned char*)data_buf + 12, bytes_read);
+      const unsigned char* payload = data_buf + 12;
+      auto crc = calculate_crc32((const unsigned char*)payload, bytes_read);
       *(uint32_t*)&data_buf[12 + bytes_read] = crc;
       tx_video_total_counter.increment();
+      {
+        std::lock_guard<std::mutex> lock(video_packet_data_mutex);
+        video_packet_data[video_packet_send_seq] = std::vector<unsigned char>(payload, payload + bytes_read);
+      }
+      video_packet_send_seq++;
     } else if (bytes_read == 0) {
       // EOF, should open again
       close(video_tunnel_in);
