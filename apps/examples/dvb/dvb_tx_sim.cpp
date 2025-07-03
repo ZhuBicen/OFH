@@ -47,6 +47,12 @@
 #include <arpa/inet.h>
 #include <random>
 #include <srsran/adt/to_array.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <signal.h>
+
 #ifdef DPDK_FOUND
 #include "srsran/hal/dpdk/dpdk_eal_factory.h"
 #endif
@@ -85,6 +91,7 @@ struct dvb_tx_sim_config {
   unsigned mtu;
 
   std::string input_file;
+  std::string output_file;
 };
 
 /// Helper structure used to group OFH header parameters.
@@ -282,7 +289,10 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
   std::shared_ptr<dvb_frame_pool> pool;
   unsigned nof_per_symbol;
 
-  std::ifstream input_stream;
+  std::string input_stream_file_name;
+  std::string output_stream_file_name;
+  int video_tunnel_in;
+  int video_tunnel_out;
   bool need_save_frame;
   bool start_save_frame;
   std::unique_ptr<dvb_frame_writer> frame_writer;
@@ -302,7 +312,10 @@ public:
     transceiver(transceiver_),
     notifier(notifier_),
     cfg(cfg_),
-    input_stream(cfg_.input_file, std::ios::binary),
+    input_stream_file_name(cfg_.input_file),
+    output_stream_file_name(cfg_.output_file),
+    video_tunnel_in(-1),
+    video_tunnel_out(-1),
     need_save_frame(false),
     start_save_frame(false)
   {
@@ -319,11 +332,8 @@ public:
       eth_builder = ether::create_frame_builder(ether_params);
     }
 
-    if (input_stream.is_open()) {
-      logger.info("open {} successful", cfg_.input_file);
-    } else {
-      logger.info("failed to open {}", cfg_.input_file);
-    }
+    open_video_tunnel_in();
+    open_video_tunnel_out();
 
     const units::bytes dvb_header_size(sizeof(struct dvb_transport_header_t));
     const units::bytes dvb_ext_header_size(sizeof(struct dvb_transport_extend_header_t));
@@ -341,10 +351,43 @@ public:
     pool = std::make_shared<dvb_frame_pool>(cfg_.mtu, nof_per_symbol);
   }
 
+  bool open_video_tunnel_in() {
+    if (video_tunnel_in != -1) {
+      close(video_tunnel_in);
+      video_tunnel_in = -1;
+    }
+    if (mkfifo(input_stream_file_name.c_str(), 0666) == -1 && errno != EEXIST) {
+      logger.error("failed to create input file. Error {}", strerror(errno));
+      return false;
+    }
+    video_tunnel_in = open(input_stream_file_name.c_str(), O_RDONLY | O_NONBLOCK);
+    return video_tunnel_in != -1;
+  }
+
+
+  bool open_video_tunnel_out()
+  {
+    if (video_tunnel_out != -1) {
+      close(video_tunnel_out);
+      video_tunnel_out = -1;
+    }
+    if (mkfifo(output_stream_file_name.c_str(), 0666) == -1 && errno != EEXIST) {
+      logger.error("failed to create video out fifo. Error {}", strerror(errno));
+      return false;
+    }
+    video_tunnel_out = open(output_stream_file_name.c_str(), O_WRONLY | O_NONBLOCK);
+    if (video_tunnel_out == -1) {
+      // logger.warning("Failed to open out video tunnel. Error: {}", strerror(errno));
+      return false;
+    }
+    logger.info("open video tunnel out successful");
+    // change_fifo_buffer_size(video_tunnel_out);
+    return true;
+  }
+
   // See interface for documentation.
   void on_new_frame(unique_rx_buffer buffer) override
   {
-    static unsigned seq_id = 0;
     span<const uint8_t> payload = buffer.data();
     auto decoded_message_info = decode_rx_message(payload, logger);
     if (!decoded_message_info.has_value()) {
@@ -359,38 +402,17 @@ public:
       return;
     }
     rx_total_counter.increment();
-    auto message_info = decoded_message_info.value();
-
-    if (need_save_frame && message_info.start_prb == 0 && ((message_info.frame_id & 1) == 0) && !start_save_frame) {
-      start_save_frame = true;
-      std::string output_file("dvb_frame_");
-      output_file += generate_time_format() + ".bin";
-      frame_writer = std::make_unique<dvb_frame_writer>(output_file, logger);
-    }
-    if (start_save_frame) {
-      if (seq_id != message_info.seq_id) {
-        dropped_counter.increment(message_info.seq_id - seq_id);
-        seq_id = message_info.seq_id;
-      }
-      seq_id++;
-    }
-
-    if (message_info.end_of_frame) {
-      seq_id = 0;
-    }
-
-    if (start_save_frame) {
-      if (!save_executor.defer([this, message_info, b = std::move(buffer)] {
-        if (start_save_frame) {
+    auto message_info    = decoded_message_info.value();
+    if (!save_executor.defer([this, message_info, b = std::move(buffer)] {
           span<const uint8_t> frame = b.data().subspan(message_info.offset, b.data().size() - message_info.offset);
-          if (frame_writer->write_frame(message_info, frame) < 0) {
-              start_save_frame = false;
-              need_save_frame = false;
+          if (video_tunnel_out != -1) {
+            if (write(video_tunnel_out, (char*)frame.data(), frame.size()) != (ssize_t)frame.size()) {
+              logger.error("Failed to write to video tunnel out. Error: {}", strerror(errno));
+              return;
+            }
           }
-        }
-      })) {
-        logger.warning("failed to dispatch frame writer task");
-      }
+        })) {
+      logger.warning("Failed to dispatch save task");
     }
   }
 
@@ -535,14 +557,18 @@ private:
     frame_buf.resize(MAX_DVB_FRAME_SIZE);
     unsigned read_size = 0;
     while (read_size < MAX_DVB_FRAME_SIZE) {
-      input_stream.read((char*)frame_buf.data() + read_size, MAX_DVB_FRAME_SIZE - read_size);
-      read_size += input_stream.gcount();
-      if(input_stream.eof()) {
-        input_stream.clear();
-        input_stream.seekg(0);
-        input_stream.read((char*)frame_buf.data() + read_size, MAX_DVB_FRAME_SIZE - read_size);
-        read_size += input_stream.gcount();
+      auto bytes_read = 0;
+      if (video_tunnel_in != -1) {
+        bytes_read = read(video_tunnel_in, (char*)frame_buf.data() + read_size, MAX_DVB_FRAME_SIZE - read_size);
       }
+      if (bytes_read == -1 || video_tunnel_in == -1) {
+        if (!open_video_tunnel_in()) {
+          std::this_thread::sleep_for(std::chrono::seconds(2));
+          logger.error("Failed to open video tunnel in. Error: {}", strerror(errno));
+        }
+        continue;
+      }
+      read_size += bytes_read;
     }
 
     const units::bytes dvb_header_size(sizeof(struct dvb_transport_header_t));
@@ -725,8 +751,16 @@ static void cleanup_signal_handler()
   srslog::flush();
 }
 
+void sigpipe_handler(int signo) {
+  fprintf(stderr, "SIGPIPE received: Reader closed FIFO.\n");
+  // You might want to set a flag or perform cleanup here
+  // For this example, we'll just print a message.
+}
+
 int main(int argc, char** argv)
 {
+  ::signal(SIGPIPE, sigpipe_handler);
+
   // Set interrupt and cleanup signal handlers.
   register_interrupt_signal_handler(interrupt_signal_handler);
   register_cleanup_signal_handler(cleanup_signal_handler);
@@ -805,6 +839,7 @@ int main(int argc, char** argv)
 
   emu_cfg.nof_prb = MAX_DVB_FRAME_SIZE / 4;
   emu_cfg.input_file = dvb_tx_sim_cfg.input_file;
+  emu_cfg.output_file = dvb_tx_sim_cfg.output_file;
 
   emu_cfg.vlan_tag     = dvb_tx_sim_cfg.vlan_tag;
   emu_cfg.mtu          = dvb_tx_sim_cfg.mtu;
