@@ -52,6 +52,7 @@ struct dvb_tx_sim_ofh_appconfig {
   bool enable_promiscuous = false;
   /// input stream file
   std::string input_file;
+  std::string output_file;
 };
 
 /// RU emulator logging parameters.
