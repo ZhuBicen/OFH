@@ -244,6 +244,50 @@ class dvb_frame_writer {
     }
 };
 
+
+bool change_fifo_buffer_size(int fd)
+{
+  long current_size;
+  // 3. Get the current pipe buffer size (optional, for verification)
+  int ret = fcntl(fd, F_GETPIPE_SZ);
+  if (ret == -1) {
+    perror("fcntl F_GETPIPE_SZ");
+    // Don't exit, as setting might still work even if getting fails (less common)
+    fprintf(stderr, "Could not get current pipe size. Error: %s\n", strerror(errno));
+    current_size = -1; // Indicate failure
+  } else {
+    current_size = (long)ret;
+    fprintf(stderr, "Current pipe buffer size: %ld bytes\n", current_size);
+  }
+  #define DESIRED_PIPE_SIZE (8 * 1024 * 1024) // 4 MB
+  // 4. Set the new pipe buffer size
+  fprintf(stderr, "Attempting to set pipe buffer size to %d bytes...\n", DESIRED_PIPE_SIZE);
+  ret = fcntl(fd, F_SETPIPE_SZ, DESIRED_PIPE_SIZE);
+  if (ret == -1) {
+    perror("fcntl F_SETPIPE_SZ");
+    fprintf(stderr, "Failed to set pipe size. Error: %s\n", strerror(errno));
+    fprintf(stderr, "Possible reasons:\n");
+    fprintf(stderr,
+            "  - Desired size exceeds /proc/sys/fs/pipe-max-size (%ld bytes on my system).\n",
+            current_size); // current_size might be wrong if F_GETPIPE_SZ failed
+    fprintf(stderr, "  - Insufficient privileges (need CAP_SYS_RESOURCE if exceeding limits).\n");
+  } else {
+    fprintf(stderr, "fcntl F_SETPIPE_SZ returned %d. (This is often the actual size set by kernel)\n", ret);
+    fprintf(stderr, "New pipe buffer size set successfully to approximately %d bytes.\n", ret);
+  }
+
+  // 5. Verify the new size (optional)
+  ret = fcntl(fd, F_GETPIPE_SZ);
+  if (ret == -1) {
+    perror("fcntl F_GETPIPE_SZ (after set)");
+    fprintf(stderr, "Could not verify new pipe size. Error: %s\n", strerror(errno));
+    return false;
+  } else {
+    fprintf(stderr, "Verified actual new pipe buffer size: %ld bytes\n", (long)ret);
+    return true;
+  }
+}
+
 /// RU emulator receives OFH traffic and replies with UL packets to a DU.
 class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
 {
@@ -331,9 +375,17 @@ public:
     } else {
       eth_builder = ether::create_frame_builder(ether_params);
     }
-
-    open_video_tunnel_in();
-    open_video_tunnel_out();
+    if (open_video_tunnel_in()) {
+      logger.info("Opened {}, {}", input_stream_file_name, video_tunnel_in); 
+    } else {
+      logger.error("Failed to open {}", input_stream_file_name);
+    }
+    if (open_video_tunnel_out()) {
+      logger.info("opening {}, {}", output_stream_file_name, video_tunnel_out);
+      change_fifo_buffer_size(video_tunnel_out);
+    } else {
+      logger.error("Failed to open {}", output_stream_file_name);
+    }
 
     const units::bytes dvb_header_size(sizeof(struct dvb_transport_header_t));
     const units::bytes dvb_ext_header_size(sizeof(struct dvb_transport_extend_header_t));
@@ -554,18 +606,10 @@ private:
     frame_buf.resize(MAX_DVB_FRAME_SIZE);
     unsigned read_size = 0;
     while (read_size < MAX_DVB_FRAME_SIZE) {
-      auto bytes_read = 0;
-      if (video_tunnel_in != -1) {
-        bytes_read = read(video_tunnel_in, (char*)frame_buf.data() + read_size, MAX_DVB_FRAME_SIZE - read_size);
+      auto bytes_read = read(video_tunnel_in, (char*)frame_buf.data() + read_size, MAX_DVB_FRAME_SIZE - read_size);
+      if (bytes_read > 0) {
+        read_size += bytes_read;
       }
-      if (bytes_read == -1 || video_tunnel_in == -1) {
-        if (!open_video_tunnel_in()) {
-          std::this_thread::sleep_for(std::chrono::seconds(2));
-          logger.error("Failed to open video tunnel in. Error: {}", strerror(errno));
-        }
-        continue;
-      }
-      read_size += bytes_read;
     }
 
     const units::bytes dvb_header_size(sizeof(struct dvb_transport_header_t));
