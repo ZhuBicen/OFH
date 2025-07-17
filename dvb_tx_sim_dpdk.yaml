@@ -13,8 +13,10 @@ dvb_tx_sim:
       mtu: 2048
       gps_alpha: 0
       gps_beta: 0
-#      frame_period: 8541664
-      frame_period: 2135416
+      # frame_period: 8641664
+      # frame_period: 2160416
+      frame_period: 3320832
+
       file: input.ts
 
 dpdk:

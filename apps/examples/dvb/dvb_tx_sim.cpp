@@ -65,7 +65,7 @@ using namespace ether;
 static constexpr unsigned ETHERNET_FRAME_SIZE = 2048;
 
 /// Maximum number of symbols in a slot, considering normal cyclic prefix.
-static constexpr size_t MAX_SEND_SYMBOLS = 16;
+static constexpr size_t MAX_SEND_SYMBOLS = 8;
 
 /// Depending on configured compression parameters one UL U-Plane message may occupy up to 2 Ethernet packets.
 static constexpr size_t MAX_NOF_PACKETS_PER_UPLANE_MESSAGE = 100;
@@ -705,7 +705,7 @@ private:
       return;
     }
     unsigned char* data_buf = (unsigned char*)frame.subspan(header_size + dvb_header_size, data_size).data();
-    ssize_t bytes_read = read(video_tunnel_in, data_buf + 12, data_size - 16);
+    ssize_t bytes_read =  read(video_tunnel_in, data_buf + 12, data_size - 16);
     if (bytes_read > 0) {
       // logger.info("read {} bytes from video tunnel", bytes_read);
       // header 12 bytes
@@ -763,7 +763,10 @@ private:
       unsigned max_frames = nof_frames_persymbol + ((left_frame > 1) ? 1 : 0);
       if (left_frame > 1) {
         left_frame--;
+      } else if (!left_frame && symbol ==  end - 1) {
+        max_frames -= 1;
       }
+ 
       for (unsigned j = 0; j != max_frames; ++j) {
         unsigned data_size = rbs_per_frame * rb_size;
         symbol_frames.emplace_back();

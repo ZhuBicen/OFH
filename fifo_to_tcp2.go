@@ -14,7 +14,7 @@ const (
 	defaultFifoPath   = "/tmp/video_tunnel_out"     // Default path to the Linux FIFO (named pipe)
 	retryInterval     = 5 * time.Second             // Interval to wait before retrying TCP connection
 	statsPrintInterval = 10 * time.Second            // Interval to print statistics
-	channelBufferSize  = 30000                        // Buffer size for each data channel (number of []byte slices)
+	channelBufferSize  = 300000                        // Buffer size for each data channel (number of []byte slices)
 	maxBytesPerMessage = 4096                        // Max bytes in a single message (fifo read chunk size)
 )
 
