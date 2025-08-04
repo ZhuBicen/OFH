@@ -52,6 +52,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <queue>
 
 #ifdef DPDK_FOUND
 #include "srsran/hal/dpdk/dpdk_eal_factory.h"
@@ -94,43 +95,6 @@ struct dvb_tx_sim_config {
   std::string output_file;
 };
 
-/// Helper structure used to group OFH header parameters.
-struct header_parameters {
-  uint8_t  frame_id;
-  uint16_t payload_size;
-  uint32_t start_prb;
-  uint16_t nof_prbs;
-  bool     last_pkg;
-};
-
-typedef struct dvb_transport_header_t {
-  uint8_t reserved      : 2;
-  uint8_t last_pkg_flag : 1;
-  uint8_t ef            : 1;
-  uint8_t version       : 4;
-  uint8_t dvb_master_id;
-  uint16_t payload;
-  uint16_t seqid;
-  uint8_t frame_id;
-  uint16_t block_number;
-  uint32_t start_block;
-} __attribute__((__packed__)) dvb_transport_header_t;
-
-typedef struct dvb_transport_extend_header_t {
-  uint8_t reserved      : 2;
-  uint8_t last_pkg_flag : 1;
-  uint8_t ef            : 1;
-  uint8_t version       : 4;
-  uint8_t dvb_master_id;
-  uint16_t payload;
-  uint16_t seqid;
-  uint8_t frame_id;
-  uint16_t block_number;
-  uint32_t start_block;
-  uint8_t modcod;
-  uint32_t scale_factor;
-} __attribute__((__packed__)) dvb_transport_extend_header_t;
-
 /// One symbol may require up to two byte buffers depending on configured compression parameters.
 using symbol_buffer = static_vector<std::vector<uint8_t>, MAX_NOF_PACKETS_PER_UPLANE_MESSAGE>;
 
@@ -156,50 +120,6 @@ enum class decoder_error_codes { drop, corrupt };
 } // namespace
 
 namespace {
-
-/// Analyzes content of received OFH packets.
-/// Returns decoded message parameters on success, otherwise an error code (see \c decoder_error_codes).
-static expected<rx_message_info, decoder_error_codes>
-decode_rx_message(span<const uint8_t> packet, srslog::basic_logger& logger)
-{
-  rx_message_info message_info;
-  struct dvb_transport_header_t *head;
-  std::size_t offset = 0;
-  // Drop non OFH packet.
-  if (packet.size() < 26) {
-    logger.debug("Dropping packet of size smaller than 26 bytes");
-    return make_unexpected(decoder_error_codes::drop);
-  }
-
-  // Verify the Ethernet type is eCPRI.
-  uint16_t eth_type = (uint16_t(packet[12]) << 8u) | packet[13];
-  if (eth_type == 0x8100) {
-    eth_type = (uint16_t(packet[16]) << 8u) | packet[17];
-    head = (struct dvb_transport_header_t *)(packet.data() + 18);
-    offset = 18;
-  } else {
-    head = (struct dvb_transport_header_t *)(packet.data() + 14);
-    offset = 14;
-  }
-
-  if (eth_type != ECPRI_ETH_TYPE) {
-    logger.debug("Dropping packet as it is not of eCPRI type");
-    return make_unexpected(decoder_error_codes::drop);
-  }
-  if (head->ef) {
-    offset += sizeof(dvb_transport_extend_header_t);
-  } else {
-    offset += sizeof(dvb_transport_header_t);
-  }
-  message_info.frame_id = head->frame_id;
-  message_info.start_prb = ntohl(head->start_block);
-  message_info.number_of_prbs = ntohs(head->block_number);
-  message_info.end_of_frame = head->last_pkg_flag;
-  message_info.offset = offset;
-  message_info.seq_id = ntohs(head->seqid);
-
-  return message_info;
-}
 
 class dvb_frame_writer {
   std::ofstream output_file;
@@ -272,6 +192,8 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
   dvb_tx_sim_transceiver& transceiver;
   dvb_tx_sim_timing_notifier& notifier;
 
+  std::queue<srsran::ether::frame_buffer*> prepared_frames;
+
   // Timing window checkers, store statistics of early/late/on-time packets.
   // RU emulator configuration.
   const dvb_tx_sim_config cfg;
@@ -286,7 +208,6 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
   kpi_counter corrupt_counter;
   kpi_counter dropped_counter;
   std::unique_ptr<ether::frame_builder>     eth_builder;
-  std::shared_ptr<dvb_frame_pool> pool;
   unsigned nof_per_symbol;
 
   std::string input_stream_file_name;
@@ -334,21 +255,6 @@ public:
 
     open_video_tunnel_in();
     open_video_tunnel_out();
-
-    const units::bytes dvb_header_size(sizeof(struct dvb_transport_header_t));
-    const units::bytes dvb_ext_header_size(sizeof(struct dvb_transport_extend_header_t));
-    const units::bytes ether_header_size(eth_builder->get_header_size());
-    const unsigned rb_size = 4;
-
-    unsigned headers_size = (ether_header_size + dvb_header_size).value();
-    // Size in bytes of one PRB using the given static compression parameters.
-    unsigned rbs_per_frame = (cfg.mtu - headers_size) / rb_size;
-
-    // It is assumed that maximum 2 packets required to send symbol data for antenna.
-    unsigned nof_frames = (cfg.nof_prb / rbs_per_frame) + ((cfg.nof_prb % rbs_per_frame) ? 1 : 0);
-
-    nof_per_symbol = (nof_frames / (MAX_NOF_SYMBOLS - 1)) + 2;
-    pool = std::make_shared<dvb_frame_pool>(cfg_.mtu, nof_per_symbol);
   }
 
   bool open_video_tunnel_in() {
@@ -388,23 +294,10 @@ public:
   // See interface for documentation.
   void on_new_frame(unique_rx_buffer buffer) override
   {
-    span<const uint8_t> payload = buffer.data();
-    auto decoded_message_info = decode_rx_message(payload, logger);
-    if (!decoded_message_info.has_value()) {
-      switch (decoded_message_info.error()) {
-        case decoder_error_codes::corrupt:
-          corrupt_counter.increment();
-          break;
-        case decoder_error_codes::drop:
-          dropped_counter.increment();
-          break;
-      }
-      return;
-    }
     rx_total_counter.increment();
-    auto message_info    = decoded_message_info.value();
-    if (!save_executor.defer([this, message_info, b = std::move(buffer)] {
-          span<const uint8_t> frame = b.data().subspan(message_info.offset, b.data().size() - message_info.offset);
+    if (!save_executor.defer([this, b = std::move(buffer)] {
+          size_t ether_header_size = eth_builder->get_header_size().value();
+          span<const uint8_t> frame = b.data().subspan(ether_header_size, b.data().size() - ether_header_size);
           if (video_tunnel_out != -1) {
             if (write(video_tunnel_out, (char*)frame.data(), frame.size()) != (ssize_t)frame.size()) {
               logger.error("Failed to write to video tunnel out. Error: {}", strerror(errno));
@@ -418,36 +311,39 @@ public:
 
   void on_new_symbol(dvb_slot_symbol_point symbol_point) override
   {
-    if (!tx_executor.execute([this, b = std::move(symbol_point)]() mutable { send_dvb_frame(std::move(b)); })) {
+    if (!tx_executor.execute([this, b = std::move(symbol_point)]() mutable { prepare_dvb_frame(); send_dvb_frame(); })) {
        logger.warning("Failed to dispatch send task");
     }
-    if (symbol_point.get_symbol_index() == 8) {
-      if (!prepare_executor.execute([this, b = std::move(symbol_point)]() mutable { prepare_dvb_frame(std::move(b)); })) {
-        logger.warning("Failed to dispatch prepare task");
-      }
-    }
+    // if (symbol_point.get_symbol_index() == 8) {
+    //   if (!prepare_executor.execute([this, b = std::move(symbol_point)]() mutable { prepare_dvb_frame(std::move(b)); })) {
+    //     logger.warning("Failed to dispatch prepare task");
+    //   }
+    // }
   }
 
-  void send_dvb_frame(dvb_slot_symbol_point symbol_point) {
+  void send_dvb_frame() {
     static_vector<span<const uint8_t>, MAX_BURST_SIZE> frame_burst;
-    auto        frame_buffers  = pool->read_frame_buffers(symbol_point);
-    if (frame_buffers.empty()) {
-      return;
-    }
-    srsran_assert(frame_burst.size() + frame_buffers.size() <= frame_burst.capacity(), "Frame burst vector is too small");
-
-    for (const auto& frame : frame_buffers) {
+    std::queue<srsran::ether::frame_buffer*> frames_to_send;
+    for (unsigned int i = 0; i < MAX_BURST_SIZE; i++) {
+      if (prepared_frames.empty()) {
+        break;
+      }
+      auto frame = prepared_frames.front();
       frame_burst.emplace_back(frame->data());
+      prepared_frames.pop();
+      frames_to_send.push(frame);
     }
-    // Send symbols.
     transceiver.send(frame_burst);
-    pool->clear_sent_frame_buffers(symbol_point);
-
-    // Increment TX_TOTAL counter.
     tx_total_counter.increment(frame_burst.size());
+
+    while(!frames_to_send.empty()) {
+      auto frame = frames_to_send.front();
+      frames_to_send.pop();
+      delete frame;
+    }
   }
 
-  void prepare_dvb_frame(dvb_slot_symbol_point symbol_point) {
+  void prepare_dvb_frame() {
     generate_test_frame_data();
   }
 
@@ -500,66 +396,29 @@ private:
 
   }
 
-  void set_static_header_params(span<uint8_t> frame, header_parameters &head_param)
-  {
-    units::bytes  ether_hdr_size  = eth_builder->get_header_size();
-    eth_builder->build_frame(frame);
-    if (head_param.last_pkg) {
-      struct dvb_transport_extend_header_t* dvb_head = (struct dvb_transport_extend_header_t*)(frame.data() + ether_hdr_size.value());
-      memset(dvb_head, 0, sizeof(dvb_transport_extend_header_t));
-      dvb_head->frame_id = head_param.frame_id;
-      dvb_head->payload = htons(head_param.payload_size);
-      dvb_head->block_number = htons(head_param.nof_prbs);
-      dvb_head->dvb_master_id = 6;
-      dvb_head->start_block = htonl(head_param.start_prb);
-      dvb_head->version = 1;
-      dvb_head->seqid = htons(seq_counters[0]++);
-      dvb_head->last_pkg_flag = 1;
-      dvb_head->ef = 1;
-      dvb_head->scale_factor = 0;
-      dvb_head->modcod = 1;
-    } else {
-      struct dvb_transport_header_t* dvb_head = (struct dvb_transport_header_t*)(frame.data() + ether_hdr_size.value());
-      memset(dvb_head, 0, sizeof(dvb_transport_header_t));
-      dvb_head->frame_id = head_param.frame_id;
-      dvb_head->payload = htons(head_param.payload_size);
-      dvb_head->block_number = htons(head_param.nof_prbs);
-      dvb_head->dvb_master_id = 6;
-      dvb_head->start_block = htonl(head_param.start_prb);
-      dvb_head->version = 1;
-      dvb_head->seqid = htons(seq_counters[0]++);
-    }
-  }
-
-  unsigned enqueue_dvb_frame_in_symbol(const span<uint8_t>& frame, uint8_t frame_id,  unsigned start_prb, unsigned number_prb, bool last_pkg, span<uint8_t> data)
-  {
-    unsigned dvb_header_size = last_pkg ? sizeof(dvb_transport_extend_header_t) : sizeof(dvb_transport_header_t);
-    unsigned header_size = eth_builder->get_header_size().value();
-    // Prepare header.
-    span<uint8_t>     frame_header = data.subspan(0, header_size + dvb_header_size);
-    header_parameters params;
-    params.frame_id = frame_id;
-    params.payload_size = frame.size() + dvb_header_size;
-    params.start_prb    = start_prb;
-    params.nof_prbs     = number_prb;
-    params.last_pkg = last_pkg;
-
-    set_static_header_params(frame_header, params);
-
-    // Prepare IQ data.
-    memcpy(data.data() + header_size + dvb_header_size, frame.data(), frame.size());
-    return params.payload_size + header_size;
-  }
 
   void generate_test_frame_data()
   {
-    std::vector<uint8_t> frame_buf;
-    frame_buf.resize(MAX_DVB_FRAME_SIZE);
-    unsigned read_size = 0;
-    while (read_size < MAX_DVB_FRAME_SIZE) {
+    for(unsigned int i = 0; i < MAX_BURST_SIZE; i++) {
       auto bytes_read = 0;
       if (video_tunnel_in != -1) {
-        bytes_read = read(video_tunnel_in, (char*)frame_buf.data() + read_size, MAX_DVB_FRAME_SIZE - read_size);
+        srsran::ether::frame_buffer* frame = new srsran::ether::frame_buffer(ETHERNET_FRAME_SIZE);
+        units::bytes  ether_hdr_size  = eth_builder->get_header_size();
+        size_t payload_size = frame->size() - ether_hdr_size.value();
+
+        eth_builder->build_frame(frame->data());
+
+        bytes_read = read(video_tunnel_in, (char*)frame->data().subspan(ether_hdr_size.value(), payload_size).data(), payload_size);
+        if (bytes_read <= 0) {
+          if (bytes_read == 0) {
+            logger.info("Video tunnel in closed, waiting for new data...");
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+          }
+          delete frame;
+          continue;
+        } else {
+          prepared_frames.push(frame);
+        }
       }
       if (bytes_read == -1 || video_tunnel_in == -1) {
         if (!open_video_tunnel_in()) {
@@ -568,65 +427,6 @@ private:
         }
         continue;
       }
-      read_size += bytes_read;
-    }
-
-    const units::bytes dvb_header_size(sizeof(struct dvb_transport_header_t));
-    const units::bytes dvb_ext_header_size(sizeof(struct dvb_transport_extend_header_t));
-    const units::bytes ether_header_size(eth_builder->get_header_size());
-    const unsigned rb_size = 4;
-
-    unsigned headers_size = (ether_header_size + dvb_header_size).value();
-    // Size in bytes of one PRB using the given static compression parameters.
-    unsigned rbs_per_frame = (cfg.mtu - headers_size) / rb_size;
-    unsigned nof_frames = (cfg.nof_prb / rbs_per_frame) + ((cfg.nof_prb % rbs_per_frame) ? 1 : 0);
-    unsigned nof_frames_persymbol = nof_frames / (MAX_NOF_SYMBOLS - 1);
-    unsigned left_frame = nof_frames - nof_frames_persymbol * (MAX_NOF_SYMBOLS - 1);
-    unsigned start_prb = 0;
-
-    span<uint8_t> frame(frame_buf.data(), frame_buf.size());
-    unsigned frame_id = notifier.get_current_frame() + 1; /*next frame to send */
-    dvb_slot_symbol_point symbol_point(frame_id * 16, 16);
-
-    pool->clear_downlink_frame(frame_id, logger);
-
-    for (unsigned symbol = 0, end = MAX_NOF_SYMBOLS - 1; symbol != end; ++symbol) {
-      scoped_frame_buffer frame_buffers(*pool, symbol_point);
-      unsigned max_frames = nof_frames_persymbol + ((left_frame > 1) ? 1 : 0);
-      if (left_frame > 1) {
-        left_frame--;
-      } else if (!left_frame && symbol ==  end - 1) {
-        max_frames -= 1;
-      }
-
-      for (unsigned j = 0; j != max_frames; ++j) {
-        ether::frame_buffer& frame_buffer = frame_buffers.get_next_frame();
-        span<uint8_t>        data         = frame_buffer.data();
-        unsigned used_size = enqueue_dvb_frame_in_symbol(frame.subspan(start_prb * rb_size, rbs_per_frame * rb_size), frame_id, start_prb, rbs_per_frame, false, data);
-        frame_buffer.set_size(used_size);
-        start_prb += rbs_per_frame;
-      }
-
-      if ((symbol == end - 1) && (start_prb < cfg.nof_prb)) {
-        unsigned data_size = (cfg.nof_prb - start_prb) * rb_size;
-        headers_size = (ether_header_size + dvb_ext_header_size).value();
-        if (headers_size + data_size > cfg.mtu) {
-          ether::frame_buffer& frame_buffer = frame_buffers.get_next_frame();
-          span<uint8_t>        data         = frame_buffer.data();
-          data_size = ((cfg.nof_prb - start_prb) / 2) *rb_size;
-          headers_size = (ether_header_size + dvb_header_size).value();
-          unsigned used_size = enqueue_dvb_frame_in_symbol(frame.subspan(start_prb * rb_size, data_size), frame_id, start_prb, data_size / rb_size, false, data);
-          frame_buffer.set_size(used_size);
-          start_prb += (cfg.nof_prb - start_prb) / 2;
-          data_size = (cfg.nof_prb - start_prb) * rb_size;
-          headers_size = (ether_header_size + dvb_ext_header_size).value();
-        }
-        ether::frame_buffer& frame_buffer = frame_buffers.get_next_frame();
-        span<uint8_t>        data         = frame_buffer.data();
-        unsigned used_size = enqueue_dvb_frame_in_symbol(frame.subspan(start_prb * rb_size, data_size), frame_id, start_prb, data_size / rb_size, true, data);
-        frame_buffer.set_size(used_size);
-      }
-      symbol_point += 1;
     }
   }
 };
@@ -776,7 +576,9 @@ int main(int argc, char** argv)
   configure_cli11_with_dvb_tx_sim_appconfig_schema(app, dvb_tx_sim_parsed_cfg);
 
   // Parse arguments.
+  std::cout << "Parsing command line arguments..." << std::endl;
   CLI11_PARSE(app, argc, argv);
+  std::cout << "Command line arguments parsed." << std::endl;
 
   // Set up logging.
   srslog::sink* log_sink = (dvb_tx_sim_parsed_cfg.log_cfg.filename == "stdout")
