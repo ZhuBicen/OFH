@@ -95,28 +95,6 @@ struct dvb_tx_sim_config {
   std::string output_file;
 };
 
-/// One symbol may require up to two byte buffers depending on configured compression parameters.
-using symbol_buffer = static_vector<std::vector<uint8_t>, MAX_NOF_PACKETS_PER_UPLANE_MESSAGE>;
-
-/// Array of symbol buffers, representing symbols of one eAxC.
-using eaxc_buffers = static_vector<symbol_buffer, MAX_NOF_SYMBOLS>;
-
-/// Aggregates information received in a message from DU.
-struct rx_message_info {
-  unsigned          frame_id;
-  unsigned          start_prb;
-  unsigned          number_of_prbs;
-  bool              end_of_frame;
-  unsigned          offset;
-  unsigned          seq_id;
-};
-
-/// \brief OFH packet decoding failure codes.
-/// drop    - packet must be dropped (it is not an eCPRI OFH packet).
-/// corrupt - packet contains OFH message with valid seqID, but contains either an undefined in the ORAN specification
-///           value, unsupported value (e.g. compression parameters) or unconfigured value (e.g. eAxC value).
-enum class decoder_error_codes { drop, corrupt };
-
 } // namespace
 
 namespace {
