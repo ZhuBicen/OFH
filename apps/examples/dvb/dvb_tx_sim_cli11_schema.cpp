@@ -74,7 +74,7 @@ static void configure_cli11_dvb_tx_sim_args(CLI::App& app, dvb_tx_sim_ofh_appcon
   app.add_option("--mtu", config.mtu, "V-LAN identifier")->capture_default_str()->check(CLI::Range(2048, 9600));
   app.add_option("--enable_promiscuous", config.enable_promiscuous, "Promiscuous mode flag")->capture_default_str();
   app.add_option("--input_file", config.input_file, "input stream file")->capture_default_str();
-  app.add_option("--output_file", config.input_file, "output stream file")->capture_default_str();
+  app.add_option("--output_file", config.output_file, "output stream file")->capture_default_str();
 }
 
 void srsran::configure_cli11_with_dvb_tx_sim_appconfig_schema(CLI::App& app, dvb_tx_sim_appconfig& dvb_tx_sim_parsed_cfg)

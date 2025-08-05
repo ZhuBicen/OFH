@@ -7,8 +7,9 @@ dvb_tx_sim:
     - network_interface: lo        # Use BDF instead of interface name for DPDK
       src_mac_addr: 6c:b3:11:60:4f:d8          # MAC address of the RU
       dst_mac_addr: 8c:1f:64:a5:df:05          # MAC address of the DU
-      enable_promiscuous: false               # Promiscuous mode flag
-      vlan_tag: 33                            # VLAN tag
+      enable_promiscuous: true               # Promiscuous mode flag
+#      vlan_tag: 33                            # VLAN tag
+      mtu: 9000
       gps_alpha: 0
       gps_beta: 0
       frame_period: 8541666

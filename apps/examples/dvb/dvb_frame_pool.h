@@ -50,7 +50,7 @@ namespace srsran {
   public:
     /// Constructors.
     frame_buffer() = default;
-    explicit frame_buffer(unsigned size) : buffer(size, 0) {}
+    explicit frame_buffer(unsigned size) : sz(size), buffer(size, 0) {}
 
     constexpr bool empty() const noexcept { return sz == 0; }
 
@@ -58,17 +58,12 @@ namespace srsran {
 
     constexpr void set_size(size_t new_size) noexcept
     {
-      srsran_assert(new_size <= MAX_ETH_FRAME_LENGTH, "Can't set_size: new size if out-of-bounds");
-      unsigned written_size = (new_size < MIN_ETH_FRAME_LENGTH) ? MIN_ETH_FRAME_LENGTH : new_size;
-      if (new_size < MIN_ETH_FRAME_LENGTH) {
-        std::fill(buffer.begin() + new_size, buffer.begin() + MIN_ETH_FRAME_LENGTH, 0);
-      }
-      sz = written_size;
+      sz = new_size;
     }
 
     constexpr void clear() noexcept { sz = 0; }
 
-    span<uint8_t>       data() noexcept { return {buffer}; }
+    span<uint8_t>       data() noexcept { return {buffer.data(), sz}; }
     span<const uint8_t> data() const noexcept { return {buffer.data(), sz}; }
 };
 
