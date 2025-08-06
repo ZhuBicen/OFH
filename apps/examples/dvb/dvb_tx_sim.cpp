@@ -76,6 +76,24 @@ static constexpr unsigned MAX_SAVE_FRAME = 8;
 
 static constexpr unsigned MAX_DVB_FRAME_SIZE = 451584;
 
+#include <sstream>
+#include <iomanip>
+
+std::string formatDataSpeed(double bps) {
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(2); // Set 2 decimal places
+
+    if (bps >= 1'000'000'000) { // 1 Gbps = 10^9 bps
+        ss << bps / 1'000'000'000 << " Gbps";
+    } else if (bps >= 1'000'000) { // 1 Mbps = 10^6 bps
+        ss << bps / 1'000'000 << " Mbps";
+    } else {
+        ss << bps << " bps";
+    }
+
+    return ss.str();
+}
+
 namespace {
 
 /// RU emulator configuration structure.
@@ -184,7 +202,9 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
 
   // Other KPI counters.
   kpi_counter rx_total_counter;
+  kpi_counter video_rx_total_counter;
   kpi_counter tx_total_counter;
+  kpi_counter tx_bytes;
   kpi_counter corrupt_counter;
   kpi_counter dropped_counter;
   std::unique_ptr<ether::frame_builder>     eth_builder;
@@ -310,6 +330,7 @@ public:
             save_first_frame = false;
           }
           if (video_tunnel_out != -1) {
+            video_rx_total_counter.increment();
             if (write(video_tunnel_out, (char*)frame.data(), frame.size()) != (ssize_t)frame.size()) {
               logger.error("Failed to write to video tunnel out. Error: {}", strerror(errno));
               return;
@@ -343,6 +364,7 @@ public:
       frame_burst.emplace_back(frame->data());
       prepared_frames.pop();
       frames_to_send.push(frame);
+      tx_bytes.increment(frame->size());
     }
     transceiver.send(frame_burst);
     tx_total_counter.increment(frame_burst.size());
@@ -396,22 +418,29 @@ public:
   void print_statistics(unsigned emu_id)
   {
     fmt::memory_buffer buffer;
+    static auto last_time = std::chrono::system_clock::now();
 
     auto    now          = std::chrono::system_clock::now();
+    double seconds = std::chrono::duration<double>(now - last_time).count();
+    last_time = now;
     std::tm current_time = fmt::gmtime(std::chrono::system_clock::to_time_t(now));
     uint64_t rx_total  = rx_total_counter.get_value();
+    uint64_t video_rx_total = video_rx_total_counter.get_value();
     uint64_t tx_total  = tx_total_counter.get_value();
     uint64_t malformed = corrupt_counter.get_value();
     uint64_t dropped   = dropped_counter.get_value();
+    uint64_t tx_bytes_total = tx_bytes.get_value();
 
     fmt::format_to(buffer,
-                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} |\n",
+                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | \n",
                    current_time,
                    emu_id,
                    rx_total,
                    malformed,
                    dropped,
-                   tx_total);
+                   tx_total,
+                   video_rx_total,
+                   formatDataSpeed(tx_bytes_total * 8 / seconds));
 
     fmt::print(to_c_str(buffer));
   }
@@ -685,7 +714,8 @@ int main(int argc, char** argv)
              "RX_TOTAL",
              "RX_CORRUPT",
              "RX_ERR_DROP",
-             "TX_TOTAL");
+             "TX_TOTAL",
+             "RX_VIDEO");
   std::string input;
   while (is_app_running) {
     for (unsigned i = 0, e = dvb_tx_sims.size(); i != e; ++i) {
