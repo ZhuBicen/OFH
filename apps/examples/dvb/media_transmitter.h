@@ -4,6 +4,7 @@
 #include "srsran/srslog/logger.h"
 
 #include <stdint.h>
+#include <optional>
 
 using srsran::span;
 
@@ -21,6 +22,9 @@ private:
     int video_tunnel_in;
     int video_tunnel_out;
     srslog::basic_logger& logger;
+    uint16_t sequence_id = 0;
+    std::optional<uint16_t> last_received_sequence_id;
+
 
     bool open_video_tunnel_in();
     bool open_video_tunnel_out();

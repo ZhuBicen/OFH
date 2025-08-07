@@ -1,5 +1,8 @@
 #include "media_transmitter.h"
 
+#include "crc16.h"
+
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -47,6 +50,15 @@ static bool change_fifo_buffer_size(int fd)
   }
 }
 
+struct Header {
+  uint32_t sync_header;
+  uint16_t length;
+  uint16_t sequence;
+  uint16_t media_length;
+} __attribute__((packed));
+
+uint32_t SYNC_HEAD = 0x1ACFFC1D;
+
 MediaTransmitter::MediaTransmitter(srslog::basic_logger& logger_,
                                    const std::string&    input_stream,
                                    const std::string&    output_stream) :
@@ -72,13 +84,23 @@ MediaTransmitter::~MediaTransmitter()
   }
 }
 
+static uint16_t get_crc(const span<const uint8_t> & payload)
+{
+    const Header* header = reinterpret_cast<const Header*>(payload.data());
+    uint16_t length = ntohs(header->length);
+    return crc16_4bytes_optimized(payload.data() + sizeof(Header::sync_header), length, 0);
+}
+
 bool MediaTransmitter::fill_payload(span<uint8_t> payload, size_t& payload_size)
 {
+  static bool print_first_header = true;
   if (video_tunnel_in == -1) {
     return false;
   }
+  srsran_assert(payload.size() > sizeof(Header) + sizeof(uint16_t), "Payload size must be larger than Header size");
 
-  ssize_t bytes_read = read(video_tunnel_in, payload.data(), payload.size());
+  ssize_t bytes_read =
+      read(video_tunnel_in, payload.data() + sizeof(Header), payload.size() - sizeof(Header) - sizeof(uint16_t));
   if (bytes_read < 0) {
     return false;
   }
@@ -89,7 +111,30 @@ bool MediaTransmitter::fill_payload(span<uint8_t> payload, size_t& payload_size)
     return false;
   }
 
-  payload_size = static_cast<size_t>(bytes_read);
+  struct Header header;
+  header.sync_header = htonl(SYNC_HEAD);
+  header.length      = htons(sizeof(header.sequence) + sizeof(header.media_length) + static_cast<uint16_t>(bytes_read));
+  header.sequence    = htons(sequence_id);
+  header.media_length = htons(static_cast<uint16_t>(bytes_read));
+  memcpy(payload.data(), &header, sizeof(header));
+
+  sequence_id = (sequence_id+1) % UINT16_MAX; 
+
+  const uint16_t crc = htons(get_crc(payload));
+  memcpy(payload.data() + sizeof(header) + bytes_read, &crc, sizeof(crc));
+
+  if (print_first_header) {
+    logger.info("Filling payload with header: sync_header=0x{:08X}, length={}, sequence={}, media_length={}, crc=0x{:04X}",
+                ntohl(header.sync_header),
+                ntohs(header.length),
+                ntohs(header.sequence),
+                ntohs(header.media_length),
+                crc);
+    print_first_header = false;
+  }
+
+
+  payload_size = static_cast<size_t>(sizeof(header) + bytes_read + sizeof(crc));
   return true;
 }
 
@@ -98,11 +143,52 @@ bool MediaTransmitter::forward_payload(span<const uint8_t> payload)
   if (video_tunnel_out == -1) {
     return false;
   }
-
-  ssize_t bytes_written = write(video_tunnel_out, payload.data(), payload.size());
-  if (bytes_written != (ssize_t)payload.size()) {
-    logger.error("Failed to write to video tunnel out. Error: {}", strerror(errno));
+  if (payload.size() < sizeof(Header) + sizeof(uint16_t)) {
+    logger.error("Payload size is too small to contain header and CRC");
     return false;
+  }
+  struct Header* original_header = (struct Header*)payload.data();
+  struct Header header = *original_header;
+  header.sync_header   = ntohl(original_header->sync_header);
+  header.length        = ntohs(original_header->length);
+  header.sequence      = ntohs(original_header->sequence);
+  header.media_length  = ntohs(original_header->media_length);
+  uint16_t seq_id       = header.sequence;
+  if (header.sync_header != SYNC_HEAD) {
+    logger.error("Invalid sync header in payload");
+    return false;
+  }
+  if (!last_received_sequence_id) {
+    last_received_sequence_id = seq_id;
+  } else {
+    uint16_t expected_sequence = (last_received_sequence_id.value() + 1) % UINT16_MAX;
+    if (header.sequence != expected_sequence) {
+      logger.warning("Received sequence ID {} does not match expected {}",
+                     ntohs(header.sequence),
+                     last_received_sequence_id.value());
+      return false;
+    }
+    last_received_sequence_id = seq_id;
+  }
+
+  if (header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t) != payload.size()) {
+    logger.error("Payload length mismatch: expected {}, got {}", header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t), payload.size());
+    return false;
+  }
+  uint16_t expected_crc = htons(get_crc(payload));
+  uint16_t received_crc = *(const uint16_t*)(payload.data() + payload.size() - 2);
+  if ( received_crc != expected_crc) {
+    logger.error("Payload CRC 0x{:04X}, expected 0x{:04X}, indicating a possible corruption", received_crc, expected_crc);
+    return false;
+  }
+  if (header.media_length > 0) {
+    ssize_t bytes_written = write(video_tunnel_out, payload.data() + sizeof(Header), header.media_length);
+    if (bytes_written != header.media_length) {
+      logger.error("Failed to write to video tunnel out. Error: {}", strerror(errno));
+      return false;
+    }
+  } else {
+    logger.warning("Media length is zero, nothing to write to video tunnel out");
   }
   return true;
 }
