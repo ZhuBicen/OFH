@@ -27,6 +27,7 @@
 #include "dvb_frame_pool.h"
 #include "scoped_frame_buffer.h"
 #include "helpers.h"
+#include "media_transmitter.h"
 #include "srsran/adt/circular_map.h"
 #include "srsran/adt/expected.h"
 #include "srsran/ofh/compression/compression_params.h"
@@ -122,50 +123,6 @@ struct dvb_tx_sim_config {
 namespace {
 
 
-bool change_fifo_buffer_size(int fd)
-{
-  long current_size;
-  // 3. Get the current pipe buffer size (optional, for verification)
-  int ret = fcntl(fd, F_GETPIPE_SZ);
-  if (ret == -1) {
-    perror("fcntl F_GETPIPE_SZ");
-    // Don't exit, as setting might still work even if getting fails (less common)
-    fprintf(stderr, "Could not get current pipe size. Error: %s\n", strerror(errno));
-    current_size = -1; // Indicate failure
-  } else {
-    current_size = (long)ret;
-    fprintf(stderr, "Current pipe buffer size: %ld bytes\n", current_size);
-  }
-  #define DESIRED_PIPE_SIZE (8 * 1024 * 1024) // 4 MB
-  // 4. Set the new pipe buffer size
-  fprintf(stderr, "Attempting to set pipe buffer size to %d bytes...\n", DESIRED_PIPE_SIZE);
-  ret = fcntl(fd, F_SETPIPE_SZ, DESIRED_PIPE_SIZE);
-  if (ret == -1) {
-    perror("fcntl F_SETPIPE_SZ");
-    fprintf(stderr, "Failed to set pipe size. Error: %s\n", strerror(errno));
-    fprintf(stderr, "Possible reasons:\n");
-    fprintf(stderr,
-            "  - Desired size exceeds /proc/sys/fs/pipe-max-size (%ld bytes on my system).\n",
-            current_size); // current_size might be wrong if F_GETPIPE_SZ failed
-    fprintf(stderr, "  - Insufficient privileges (need CAP_SYS_RESOURCE if exceeding limits).\n");
-  } else {
-    fprintf(stderr, "fcntl F_SETPIPE_SZ returned %d. (This is often the actual size set by kernel)\n", ret);
-    fprintf(stderr, "New pipe buffer size set successfully to approximately %d bytes.\n", ret);
-  }
-
-  // 5. Verify the new size (optional)
-  ret = fcntl(fd, F_GETPIPE_SZ);
-  if (ret == -1) {
-    perror("fcntl F_GETPIPE_SZ (after set)");
-    fprintf(stderr, "Could not verify new pipe size. Error: %s\n", strerror(errno));
-    return false;
-  } else {
-    fprintf(stderr, "Verified actual new pipe buffer size: %ld bytes\n", (long)ret);
-    return true;
-  }
-}
-
-
 /// RU emulator receives OFH traffic and replies with UL packets to a DU.
 class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
 {
@@ -194,10 +151,9 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
   dvb_tx_sim_transceiver& transceiver;
   dvb_tx_sim_timing_notifier& notifier;
 
+  // using ethernet_frame_buffer = static_vector<uint8_t, ETHERNET_FRAME_SIZE>;
   using ethernet_frame_buffers = static_vector<frame_buffer, NOF_ETHERNET_FRAME_IN_AIR_FRAME>;
   std::array<ethernet_frame_buffers, 2> pool;
-
-  std::queue<srsran::ether::frame_buffer*> prepared_frames;
 
   // Timing window checkers, store statistics of early/late/on-time packets.
   // RU emulator configuration.
@@ -217,10 +173,9 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
 
   std::string input_stream_file_name;
   std::string output_stream_file_name;
-  int video_tunnel_in;
-  int video_tunnel_out;
   bool need_save_frame;
   bool start_save_frame;
+  MediaTransmitter media_transmitter;
 
 public:
   dvb_tx_sim(srslog::basic_logger&    logger_,
@@ -239,10 +194,9 @@ public:
     cfg(cfg_),
     input_stream_file_name(cfg_.input_file),
     output_stream_file_name(cfg_.output_file),
-    video_tunnel_in(-1),
-    video_tunnel_out(-1),
     need_save_frame(false),
-    start_save_frame(false)
+    start_save_frame(false),
+    media_transmitter(logger_, input_stream_file_name, output_stream_file_name)
   {
     seq_counters.insert(0, 0);
     ether::vlan_frame_params ether_params;
@@ -256,52 +210,8 @@ public:
     } else {
       eth_builder = ether::create_frame_builder(ether_params);
     }
-
-    open_video_tunnel_in();
-    if (open_video_tunnel_out()) {
-      change_fifo_buffer_size(video_tunnel_out);
-    }
   }
 
-  bool open_video_tunnel_in() {
-    if (video_tunnel_in != -1) {
-      close(video_tunnel_in);
-      video_tunnel_in = -1;
-    }
-    if (mkfifo(input_stream_file_name.c_str(), 0666) == -1 && errno != EEXIST) {
-      logger.error("failed to create input file. Error {}", strerror(errno));
-      return false;
-    }
-    video_tunnel_in = open(input_stream_file_name.c_str(), O_RDONLY | O_NONBLOCK);
-    if (video_tunnel_in != -1) {
-      // logger.info("open video tunnel in successful {}, fd {}", input_stream_file_name, video_tunnel_in);
-      return true;
-    } else {
-      logger.info("Failed to open video tunnel in. File: {}, Error: {}", input_stream_file_name, strerror(errno));
-      return false;
-    }
-  }
-
-
-  bool open_video_tunnel_out()
-  {
-    if (video_tunnel_out != -1) {
-      close(video_tunnel_out);
-      video_tunnel_out = -1;
-    }
-    if (mkfifo(output_stream_file_name.c_str(), 0666) == -1 && errno != EEXIST) {
-      logger.error("failed to create video out fifo. File: {}, Error {}", output_stream_file_name, strerror(errno));
-      return false;
-    }
-    video_tunnel_out = open(output_stream_file_name.c_str(), O_WRONLY | O_NONBLOCK);
-    if (video_tunnel_out == -1) {
-      // logger.warning("Failed to open out video tunnel. Error: {}", strerror(errno));
-      return false;
-    }
-    logger.info("open video tunnel out successful");
-    // change_fifo_buffer_size(video_tunnel_out);
-    return true;
-  }
 
   bool save_to_binary_file(const void* data_address, std::size_t data_length, const std::string& file_path) {
     std::ofstream output_file(file_path, std::ios::out | std::ios::binary);
@@ -334,12 +244,8 @@ public:
             save_to_binary_file(b.data().data(), b.data().size(), "received_frame.bin");
             save_first_frame = false;
           }
-          if (video_tunnel_out != -1) {
+          if (media_transmitter.forward_payload(frame)) {
             video_rx_total_counter.increment();
-            if (write(video_tunnel_out, (char*)frame.data(), frame.size()) != (ssize_t)frame.size()) {
-              logger.error("Failed to write to video tunnel out. Error: {}", strerror(errno));
-              return;
-            }
           }
         })) {
       logger.warning("Failed to dispatch save task");
@@ -385,12 +291,6 @@ public:
     buffers.clear();
 
     for (unsigned int i = 0; i < buffers.capacity(); i++) {
-      if (video_tunnel_in == -1) {
-        open_video_tunnel_in();
-      }
-      if (video_tunnel_in == -1) {
-        return;
-      }
       // logger.info("Preparing frame {}, buffer {} for sending", frame_id, i);
       buffers.emplace_back(frame_buffer(ETHERNET_FRAME_SIZE));
       auto* frame = &buffers.back();
@@ -399,16 +299,13 @@ public:
       size_t payload_size = frame->size() - header_size;
       eth_builder->build_frame(frame->data());
 
-      auto    payload    = frame->data().subspan(header_size, payload_size);
-      ssize_t bytes_read = read(video_tunnel_in, (char*)payload.data(), payload.size());
-      if (bytes_read <= 0) {
-        if (bytes_read == 0) {
-          open_video_tunnel_in();
-        }
+      auto   payload     = frame->data().subspan(header_size, payload_size);
+      size_t filled_size = 0;
+      if (!media_transmitter.fill_payload(payload, filled_size)) {
         buffers.pop_back();
       } else {
         // logger.info("Read {} bytes from video tunnel in", bytes_read);
-        frame->set_size(bytes_read + header_size);
+        frame->set_size(filled_size + header_size);
       }
     }
   }
