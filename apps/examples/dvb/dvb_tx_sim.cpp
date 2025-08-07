@@ -76,6 +76,10 @@ static constexpr unsigned MAX_SAVE_FRAME = 8;
 
 static constexpr unsigned MAX_DVB_FRAME_SIZE = 451584;
 
+static constexpr unsigned NOF_ETHERNET_FRAME_IN_AIR_FRAME = 64;
+static_assert(NOF_ETHERNET_FRAME_IN_AIR_FRAME == MAX_BURST_SIZE, 
+              "The number of Ethernet frames in the air frame must match the maximum buffer size");
+
 #include <sstream>
 #include <iomanip>
 
@@ -190,6 +194,9 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
   dvb_tx_sim_transceiver& transceiver;
   dvb_tx_sim_timing_notifier& notifier;
 
+  using ethernet_frame_buffers = static_vector<frame_buffer, NOF_ETHERNET_FRAME_IN_AIR_FRAME>;
+  std::array<ethernet_frame_buffers, 2> pool;
+
   std::queue<srsran::ether::frame_buffer*> prepared_frames;
 
   // Timing window checkers, store statistics of early/late/on-time packets.
@@ -197,8 +204,6 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
   const dvb_tx_sim_config cfg;
   // Keeps track of last used seq_id for each eAxC.
   circular_map<unsigned, uint16_t, MAX_SUPPORTED_EAXC_ID_VALUE> seq_counters;
-  // Stores the list of configured eAxC.
-  static_vector<unsigned, MAX_NOF_SUPPORTED_EAXC> ul_eaxc;
 
   // Other KPI counters.
   kpi_counter rx_total_counter;
@@ -343,75 +348,80 @@ public:
 
   void on_new_symbol(dvb_slot_symbol_point symbol_point) override
   {
-    if (!tx_executor.execute([this, b = std::move(symbol_point)]() mutable { prepare_dvb_frame(); send_dvb_frame(); })) {
-       // logger.warning("Failed to dispatch send task");
+    if (symbol_point.get_symbol_index() == 0) {
+      if (!tx_executor.execute([this, b = std::move(symbol_point)]() mutable { send_dvb_frame(std::move(b)); })) {
+        logger.warning("Failed to dispatch send task");
+      }
     }
-    // if (symbol_point.get_symbol_index() == 8) {
-    //   if (!prepare_executor.execute([this, b = std::move(symbol_point)]() mutable { prepare_dvb_frame(); })) {
-    //     logger.warning("Failed to dispatch prepare task");
-    //   }
-    // }
+    if (symbol_point.get_symbol_index() == 8) {
+      if (!prepare_executor.execute(
+              [this, b = std::move(symbol_point)]() mutable { prepare_dvb_frame(std::move(b)); })) {
+        logger.warning("Failed to dispatch prepare task");
+      }
+    }
   }
 
-  void send_dvb_frame() {
+  void send_dvb_frame(dvb_slot_symbol_point symbol_point) {
     static_vector<span<const uint8_t>, MAX_BURST_SIZE> frame_burst;
-    std::queue<srsran::ether::frame_buffer*> frames_to_send;
-    for (unsigned int i = 0; i < MAX_BURST_SIZE; i++) {
-      if (prepared_frames.empty()) {
-        break;
-      }
-      auto frame = prepared_frames.front();
-      frame_burst.emplace_back(frame->data());
-      prepared_frames.pop();
-      frames_to_send.push(frame);
-      tx_bytes.increment(frame->size());
+
+    // uint8_t frame_index = symbol_point.get_frame();
+    auto buffers = pool[symbol_point.get_frame() % 1];
+
+    // if (buffers.size() != buffers.capacity()) {
+    //   logger.warning("frames are not available for sending at frame index {}, size {} expected {}", frame_index, buffers.size(), buffers.capacity());
+    //   return;
+    // }
+    for (auto& frame: buffers) {
+      frame_burst.emplace_back(frame.data());
+      tx_bytes.increment(frame.size());
     }
     transceiver.send(frame_burst);
     tx_total_counter.increment(frame_burst.size());
-
-    while(!frames_to_send.empty()) {
-      auto frame = frames_to_send.front();
-      frames_to_send.pop();
-      delete frame;
-    }
   }
 
-  void generate_test_frame_data()
+  void generate_test_frame_data(unsigned int frame_id)
   {
-    for (unsigned int i = 0; i < MAX_BURST_SIZE; i++) {
+    auto& buffers = pool[frame_id % 1];
+    buffers.clear();
+
+    for (unsigned int i = 0; i < buffers.capacity(); i++) {
       if (video_tunnel_in == -1) {
         open_video_tunnel_in();
       }
       if (video_tunnel_in == -1) {
         return;
       }
-      srsran::ether::frame_buffer* frame        = new srsran::ether::frame_buffer(100);
-      size_t                       header_size  = eth_builder->get_header_size().value();
-      size_t                       payload_size = frame->size() - header_size;
+      // logger.info("Preparing frame {}, buffer {} for sending", frame_id, i);
+      buffers.emplace_back(frame_buffer(ETHERNET_FRAME_SIZE));
+      auto* frame = &buffers.back();
+
+      size_t header_size  = eth_builder->get_header_size().value();
+      size_t payload_size = frame->size() - header_size;
       eth_builder->build_frame(frame->data());
 
-      auto payload = frame->data().subspan(header_size, payload_size);
-      ssize_t bytes_read   = read(video_tunnel_in, (char*)payload.data(), payload.size());
+      auto    payload    = frame->data().subspan(header_size, payload_size);
+      ssize_t bytes_read = read(video_tunnel_in, (char*)payload.data(), payload.size());
       if (bytes_read <= 0) {
-        delete frame;
         if (bytes_read == 0) {
           open_video_tunnel_in();
         }
+        buffers.pop_back();
       } else {
         // logger.info("Read {} bytes from video tunnel in", bytes_read);
         frame->set_size(bytes_read + header_size);
-        prepared_frames.push(frame);
       }
     }
   }
 
-  void prepare_dvb_frame() {
-    generate_test_frame_data();
+  void prepare_dvb_frame(dvb_slot_symbol_point symbol_point) {
+    uint8_t frame_index = symbol_point.get_frame();
+    generate_test_frame_data(frame_index + 1);
   }
 
   void start()
   {
-    generate_test_frame_data();
+    logger.info("Starting DVB TX simulator");
+    generate_test_frame_data(0);
     transceiver.start(*this);
   }
 
