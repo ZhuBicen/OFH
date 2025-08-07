@@ -84,11 +84,17 @@ MediaTransmitter::~MediaTransmitter()
   }
 }
 
-static uint16_t get_crc(const span<const uint8_t> & payload)
+static uint16_t get_crc(const span<const uint8_t>& payload)
 {
-    const Header* header = reinterpret_cast<const Header*>(payload.data());
-    uint16_t length = ntohs(header->length);
-    return crc16_4bytes_optimized(payload.data() + sizeof(Header::sync_header), length, 0);
+  const Header* header = reinterpret_cast<const Header*>(payload.data());
+  uint16_t      length = ntohs(header->length);
+  return crc16_4bytes_optimized(payload.data() + sizeof(Header::sync_header), length, 0);
+}
+static void fill_dummy_payload(uint8_t* payload, size_t size)
+{
+  for (size_t i = 0; i < size; ++i) {
+    payload[i] = 0xa5;
+  }
 }
 
 bool MediaTransmitter::fill_payload(span<uint8_t> payload, size_t& payload_size)
@@ -99,40 +105,45 @@ bool MediaTransmitter::fill_payload(span<uint8_t> payload, size_t& payload_size)
   }
   srsran_assert(payload.size() > sizeof(Header) + sizeof(uint16_t), "Payload size must be larger than Header size");
 
-  ssize_t bytes_read =
-      read(video_tunnel_in, payload.data() + sizeof(Header), payload.size() - sizeof(Header) - sizeof(uint16_t));
-  if (bytes_read < 0) {
-    return false;
-  }
+  span<uint8_t> media      = payload.subspan(sizeof(Header), payload.size() - sizeof(Header) - sizeof(uint16_t));
+  ssize_t       bytes_read = read(video_tunnel_in, media.data(), media.size());
   if (bytes_read == 0) {
     // logger.info("No data read from video tunnel in, possibly EOF or no data available.");
     payload_size = 0;
     open_video_tunnel_in();
     return false;
   }
+  uint16_t media_size = 0;
+  if (bytes_read < 0) {
+    fill_dummy_payload(media.data(), media.size());
+    bytes_read = media.size();
+    media_size = 0;
+  } else {
+    media_size = static_cast<uint16_t>(bytes_read);
+  }
 
   struct Header header;
   header.sync_header = htonl(SYNC_HEAD);
   header.length      = htons(sizeof(header.sequence) + sizeof(header.media_length) + static_cast<uint16_t>(bytes_read));
   header.sequence    = htons(sequence_id);
-  header.media_length = htons(static_cast<uint16_t>(bytes_read));
+  header.media_length = htons(media_size);
   memcpy(payload.data(), &header, sizeof(header));
 
-  sequence_id = (sequence_id+1) % UINT16_MAX; 
+  sequence_id = (sequence_id + 1) % UINT16_MAX;
 
   const uint16_t crc = htons(get_crc(payload));
   memcpy(payload.data() + sizeof(header) + bytes_read, &crc, sizeof(crc));
 
   if (print_first_header) {
-    logger.info("Filling payload with header: sync_header=0x{:08X}, length={}, sequence={}, media_length={}, crc=0x{:04X}",
-                ntohl(header.sync_header),
-                ntohs(header.length),
-                ntohs(header.sequence),
-                ntohs(header.media_length),
-                crc);
+    logger.info(
+        "Filling payload with header: sync_header=0x{:08X}, length={}, sequence={}, media_length={}, crc=0x{:04X}",
+        ntohl(header.sync_header),
+        ntohs(header.length),
+        ntohs(header.sequence),
+        ntohs(header.media_length),
+        crc);
     print_first_header = false;
   }
-
 
   payload_size = static_cast<size_t>(sizeof(header) + bytes_read + sizeof(crc));
   return true;
@@ -148,12 +159,12 @@ bool MediaTransmitter::forward_payload(span<const uint8_t> payload)
     return false;
   }
   struct Header* original_header = (struct Header*)payload.data();
-  struct Header header = *original_header;
-  header.sync_header   = ntohl(original_header->sync_header);
-  header.length        = ntohs(original_header->length);
-  header.sequence      = ntohs(original_header->sequence);
-  header.media_length  = ntohs(original_header->media_length);
-  uint16_t seq_id       = header.sequence;
+  struct Header  header          = *original_header;
+  header.sync_header             = ntohl(original_header->sync_header);
+  header.length                  = ntohs(original_header->length);
+  header.sequence                = ntohs(original_header->sequence);
+  header.media_length            = ntohs(original_header->media_length);
+  uint16_t seq_id                = header.sequence;
   if (header.sync_header != SYNC_HEAD) {
     logger.error("Invalid sync header in payload");
     return false;
@@ -166,19 +177,23 @@ bool MediaTransmitter::forward_payload(span<const uint8_t> payload)
       logger.warning("Received sequence ID {} does not match expected {}",
                      ntohs(header.sequence),
                      last_received_sequence_id.value());
+      last_received_sequence_id = (uint16_t)header.sequence;
       return false;
     }
     last_received_sequence_id = seq_id;
   }
 
   if (header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t) != payload.size()) {
-    logger.error("Payload length mismatch: expected {}, got {}", header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t), payload.size());
+    logger.error("Payload length mismatch: expected {}, got {}",
+                 header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t),
+                 payload.size());
     return false;
   }
   uint16_t expected_crc = htons(get_crc(payload));
   uint16_t received_crc = *(const uint16_t*)(payload.data() + payload.size() - 2);
-  if ( received_crc != expected_crc) {
-    logger.error("Payload CRC 0x{:04X}, expected 0x{:04X}, indicating a possible corruption", received_crc, expected_crc);
+  if (received_crc != expected_crc) {
+    logger.error(
+        "Payload CRC 0x{:04X}, expected 0x{:04X}, indicating a possible corruption", received_crc, expected_crc);
     return false;
   }
   if (header.media_length > 0) {
@@ -188,7 +203,7 @@ bool MediaTransmitter::forward_payload(span<const uint8_t> payload)
       return false;
     }
   } else {
-    logger.warning("Media length is zero, nothing to write to video tunnel out");
+    // logger.warning("Media length is zero, nothing to write to video tunnel out");
   }
   return true;
 }
