@@ -1,0 +1,21 @@
+log:
+  filename: stdout
+  level: info
+
+dvb_tx_sim:
+   cells:
+     #- network_interface: enp101s0f1np1        # Use BDF instead of interface name for DPDK
+    - network_interface: 0000:65:06.0        # Use BDF instead of interface name for DPDK
+      src_mac_addr: 00:00:00:00:00:00          # MAC address of the RU
+      dst_mac_addr: FF:FF:FF:FF:FF:FF          # MAC address of the DU
+      enable_promiscuous: true               # Promiscuous mode flag
+      mtu: 2048
+      gps_alpha: 0
+      gps_beta: 0
+      frame_period: 8641664
+      # frame_period: 2160416
+      # frame_period: 3320832
+      input_file: /tmp/input_stream
+      output_file: /tmp/output_stream
+dpdk:
+   eal_args: "--lcores (0-1)@(0-15) --proc-type=auto"

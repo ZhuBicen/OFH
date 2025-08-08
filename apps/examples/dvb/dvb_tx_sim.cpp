@@ -77,9 +77,7 @@ static constexpr unsigned MAX_SAVE_FRAME = 8;
 
 static constexpr unsigned MAX_DVB_FRAME_SIZE = 451584;
 
-static constexpr unsigned NOF_ETHERNET_FRAME_IN_AIR_FRAME = 64;
-static_assert(NOF_ETHERNET_FRAME_IN_AIR_FRAME == MAX_BURST_SIZE, 
-              "The number of Ethernet frames in the air frame must match the maximum buffer size");
+static constexpr unsigned NOF_ETHERNET_FRAME_IN_AIR_FRAME = 10;
 
 #include <sstream>
 #include <iomanip>
@@ -249,8 +247,11 @@ public:
             logger.info("Saved first received frame to 'received_frame.bin' done");
             return;
           }
-          if (media_transmitter.forward_payload(frame)) {
+          auto result = media_transmitter.forward_payload(frame);
+          if (result == PayloadCheckResult::OK) {
             video_rx_total_counter.increment();
+          } else if (result == PayloadCheckResult::INVALID_LENGTH) {
+            save_to_binary_file(b.data().data(), b.data().size(), "malformed_frame.bin");
           }
         })) {
       logger.warning("Failed to dispatch save task");
@@ -283,8 +284,13 @@ public:
     //   return;
     // }
     for (auto& frame: buffers) {
-      frame_burst.emplace_back(frame.data());
-      tx_bytes.increment(frame.size());
+        frame_burst.emplace_back(frame.data());
+        tx_bytes.increment(frame.size());
+        if (frame_burst.size() >= MAX_BURST_SIZE) { 
+          transceiver.send(frame_burst);
+          tx_total_counter.increment(frame_burst.size());
+          frame_burst.clear();
+        }
     }
     transceiver.send(frame_burst);
     tx_total_counter.increment(frame_burst.size());

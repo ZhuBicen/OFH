@@ -124,7 +124,12 @@ bool MediaTransmitter::fill_payload(span<uint8_t> payload, size_t& payload_size)
 
   struct Header header;
   header.sync_header = htonl(SYNC_HEAD);
-  header.length      = htons(sizeof(header.sequence) + sizeof(header.media_length) + static_cast<uint16_t>(bytes_read));
+  uint16_t length      = sizeof(header.sequence) + sizeof(header.media_length) + static_cast<uint16_t>(bytes_read);
+  uint16_t padding_length = 0;
+  if (length < 38) {
+    padding_length = 38 - length;
+  }
+  header.length = htons(length + padding_length);
   header.sequence    = htons(sequence_id);
   header.media_length = htons(media_size);
   memcpy(payload.data(), &header, sizeof(header));
@@ -132,7 +137,7 @@ bool MediaTransmitter::fill_payload(span<uint8_t> payload, size_t& payload_size)
   sequence_id = (sequence_id + 1) % UINT16_MAX;
 
   const uint16_t crc = htons(get_crc(payload));
-  memcpy(payload.data() + sizeof(header) + bytes_read, &crc, sizeof(crc));
+  memcpy(payload.data() + sizeof(header) + bytes_read + padding_length, &crc, sizeof(crc));
 
   if (print_first_header) {
     logger.info(
@@ -145,18 +150,18 @@ bool MediaTransmitter::fill_payload(span<uint8_t> payload, size_t& payload_size)
     print_first_header = false;
   }
 
-  payload_size = static_cast<size_t>(sizeof(header) + bytes_read + sizeof(crc));
+  payload_size = static_cast<size_t>(sizeof(header) + bytes_read + padding_length + sizeof(crc));
   return true;
 }
 
-bool MediaTransmitter::forward_payload(span<const uint8_t> payload)
+PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload)
 {
   if (video_tunnel_out == -1) {
-    return false;
+    return PayloadCheckResult::NO_VIDEO_TUNNEL;
   }
   if (payload.size() < sizeof(Header) + sizeof(uint16_t)) {
     logger.error("Payload size is too small to contain header and CRC");
-    return false;
+    return PayloadCheckResult::TOO_SMALL_PAYLOAD;
   }
   struct Header* original_header = (struct Header*)payload.data();
   struct Header  header          = *original_header;
@@ -167,7 +172,7 @@ bool MediaTransmitter::forward_payload(span<const uint8_t> payload)
   uint16_t seq_id                = header.sequence;
   if (header.sync_header != SYNC_HEAD) {
     logger.error("Invalid sync header in payload");
-    return false;
+    return PayloadCheckResult::INVALID_SYNC_HEADER;
   }
   if (!last_received_sequence_id) {
     last_received_sequence_id = seq_id;
@@ -178,34 +183,34 @@ bool MediaTransmitter::forward_payload(span<const uint8_t> payload)
                      ntohs(header.sequence),
                      last_received_sequence_id.value());
       last_received_sequence_id = (uint16_t)header.sequence;
-      return false;
+      return PayloadCheckResult::INVALID_SEQUENCE_ID;
     }
     last_received_sequence_id = seq_id;
   }
 
-  if (header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t) != payload.size()) {
+  if (header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t) != payload.size()) {                                                                   
     logger.error("Payload length mismatch: expected {}, got {}",
                  header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t),
                  payload.size());
-    return false;
+    return PayloadCheckResult::INVALID_LENGTH;
   }
   uint16_t expected_crc = htons(get_crc(payload));
   uint16_t received_crc = *(const uint16_t*)(payload.data() + payload.size() - 2);
   if (received_crc != expected_crc) {
     logger.error(
         "Payload CRC 0x{:04X}, expected 0x{:04X}, indicating a possible corruption", received_crc, expected_crc);
-    return false;
+    return PayloadCheckResult::INVALID_CRC;
   }
   if (header.media_length > 0) {
     ssize_t bytes_written = write(video_tunnel_out, payload.data() + sizeof(Header), header.media_length);
     if (bytes_written != header.media_length) {
       logger.error("Failed to write to video tunnel out. Error: {}", strerror(errno));
-      return false;
+      return PayloadCheckResult::VIDEO_TUNNEL_BUSY;
     }
   } else {
     // logger.warning("Media length is zero, nothing to write to video tunnel out");
   }
-  return true;
+  return PayloadCheckResult::OK;
 }
 
 bool MediaTransmitter::open_video_tunnel_in()

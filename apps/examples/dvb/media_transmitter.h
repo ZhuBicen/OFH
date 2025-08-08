@@ -8,13 +8,24 @@
 
 using srsran::span;
 
+enum class PayloadCheckResult {
+    OK,
+    NO_VIDEO_TUNNEL,
+    VIDEO_TUNNEL_BUSY,
+    TOO_SMALL_PAYLOAD,
+    INVALID_SYNC_HEADER,
+    INVALID_SEQUENCE_ID,
+    INVALID_LENGTH,
+    INVALID_CRC,
+};
+
 class MediaTransmitter {
 public:
     MediaTransmitter(srslog::basic_logger& logger, const std::string& input_stream, const std::string& output_stream);
     ~MediaTransmitter();
     
 bool fill_payload(span<uint8_t> payload, size_t& payload_size);
-bool forward_payload(span<const uint8_t> payload);
+PayloadCheckResult forward_payload(span<const uint8_t> payload);
 
 private:
     std::string input_stream_file_name;
