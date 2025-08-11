@@ -60,9 +60,7 @@ static void configure_cli11_dvb_tx_sim_dpdk_args(CLI::App& app, std::optional<dv
 
 static void configure_cli11_dvb_tx_sim_args(CLI::App& app, dvb_tx_sim_ofh_appconfig& config)
 {
-  app.add_option("--gps_alpha", config.gps_Alpha, "GPS Alpha")
-    ->capture_default_str()
-    ->check(CLI::Range(0.0, 1.2288e7));
+  app.add_option("--gps_alpha", config.gps_Alpha, "GPS Alpha")->capture_default_str()->check(CLI::Range(0.0, 1.2288e7));
   app.add_option("--gps_beta", config.gps_Beta, "GPS Beta")->capture_default_str()->check(CLI::Range(-32768, 32767));
   app.add_option("--frame_period", config.frame_period, "Frame period")->capture_default_str();
 
@@ -75,9 +73,13 @@ static void configure_cli11_dvb_tx_sim_args(CLI::App& app, dvb_tx_sim_ofh_appcon
   app.add_option("--enable_promiscuous", config.enable_promiscuous, "Promiscuous mode flag")->capture_default_str();
   app.add_option("--input_file", config.input_file, "input stream file")->capture_default_str();
   app.add_option("--output_file", config.output_file, "output stream file")->capture_default_str();
+  app.add_option("--speed_factor", config.speed_factor, "Speed factor for the media transmitter")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 10000));
 }
 
-void srsran::configure_cli11_with_dvb_tx_sim_appconfig_schema(CLI::App& app, dvb_tx_sim_appconfig& dvb_tx_sim_parsed_cfg)
+void srsran::configure_cli11_with_dvb_tx_sim_appconfig_schema(CLI::App&             app,
+                                                              dvb_tx_sim_appconfig& dvb_tx_sim_parsed_cfg)
 {
   // Logging section.
   CLI::App* log_subcmd = app.add_subcommand("log", "Logging configuration")->configurable();
@@ -91,12 +93,12 @@ void srsran::configure_cli11_with_dvb_tx_sim_appconfig_schema(CLI::App& app, dvb
   ru_subcmd->add_option_function<std::string>(
       "--cells",
       [&dvb_tx_sim_parsed_cfg](const std::string& values) {
-          CLI::App subapp("DVB tx simulators");
-          subapp.config_formatter(create_yaml_config_parser());
-          subapp.allow_config_extras(CLI::config_extras_mode::error);
-          configure_cli11_dvb_tx_sim_args(subapp, dvb_tx_sim_parsed_cfg.dvb_tx_sim_cfg);
-          std::istringstream ss(values);
-          subapp.parse_from_stream(ss);
+        CLI::App subapp("DVB tx simulators");
+        subapp.config_formatter(create_yaml_config_parser());
+        subapp.allow_config_extras(CLI::config_extras_mode::error);
+        configure_cli11_dvb_tx_sim_args(subapp, dvb_tx_sim_parsed_cfg.dvb_tx_sim_cfg);
+        std::istringstream ss(values);
+        subapp.parse_from_stream(ss);
       },
       "Sets the dvb tx simulator configuration");
 

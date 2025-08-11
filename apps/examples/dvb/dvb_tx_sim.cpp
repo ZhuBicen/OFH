@@ -20,14 +20,16 @@
  *
  */
 
+#include "dvb_frame_pool.h"
 #include "dvb_tx_sim_appconfig.h"
 #include "dvb_tx_sim_cli11_schema.h"
 #include "dvb_tx_sim_timing_notifier.h"
 #include "dvb_tx_sim_transceiver.h"
-#include "dvb_frame_pool.h"
-#include "scoped_frame_buffer.h"
 #include "helpers.h"
+#include "kpi_counter.h"
 #include "media_transmitter.h"
+#include "packet_sender.h"
+#include "scoped_frame_buffer.h"
 #include "srsran/adt/circular_map.h"
 #include "srsran/adt/expected.h"
 #include "srsran/ofh/compression/compression_params.h"
@@ -44,16 +46,17 @@
 #include "srsran/support/executors/task_executor.h"
 #include "srsran/support/format_utils.h"
 #include "srsran/support/signal_handling.h"
+
 #include "fmt/chrono.h"
 #include <arpa/inet.h>
-#include <random>
-#include <srsran/adt/to_array.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <queue>
+#include <random>
+#include <signal.h>
+#include <srsran/adt/to_array.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #ifdef DPDK_FOUND
 #include "srsran/hal/dpdk/dpdk_eal_factory.h"
@@ -77,24 +80,27 @@ static constexpr unsigned MAX_SAVE_FRAME = 8;
 
 static constexpr unsigned MAX_DVB_FRAME_SIZE = 451584;
 
-static constexpr unsigned NOF_ETHERNET_FRAME_IN_AIR_FRAME = 10;
+static constexpr unsigned NOF_ETHERNET_FRAME_IN_AIR_FRAME = 1000;
 
-#include <sstream>
 #include <iomanip>
+#include <sstream>
 
-std::string formatDataSpeed(double bps) {
-    std::stringstream ss;
-    ss << std::fixed << std::setprecision(2); // Set 2 decimal places
+std::string formatDataSpeed(double bps)
+{
+  std::stringstream ss;
+  ss << std::fixed << std::setprecision(2); // Set 2 decimal places
 
-    if (bps >= 1'000'000'000) { // 1 Gbps = 10^9 bps
-        ss << bps / 1'000'000'000 << " Gbps";
-    } else if (bps >= 1'000'000) { // 1 Mbps = 10^6 bps
-        ss << bps / 1'000'000 << " Mbps";
-    } else {
-        ss << bps << " bps";
-    }
+  if (bps >= 1'000'000'000) { // 1 Gbps = 10^9 bps
+    ss << bps / 1'000'000'000 << " Gbps";
+  } else if (bps >= 1'000'000) { // 1 Mbps = 10^6 bps
+    ss << bps / 1'000'000 << " Mbps";
+  } else if (bps >= 1'000) { // 1 Kbps = 10^3 bps
+    ss << bps / 1'000 << " Kbps";
+  } else {
+    ss << bps << " bps";
+  }
 
-    return ss.str();
+  return ss.str();
 }
 
 namespace {
@@ -112,6 +118,8 @@ struct dvb_tx_sim_config {
 
   unsigned mtu;
 
+  unsigned speed_factor;
+
   std::string input_file;
   std::string output_file;
 };
@@ -120,38 +128,14 @@ struct dvb_tx_sim_config {
 
 namespace {
 
-
 /// RU emulator receives OFH traffic and replies with UL packets to a DU.
-class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
+class dvb_tx_sim : public frame_notifier
 {
-  /// Helper class that represents a KPI counter.
-  class kpi_counter
-  {
-    std::atomic<uint64_t> counter{0};
-    uint64_t              last_value_printed = 0U;
-
-  public:
-    uint64_t get_value()
-    {
-      uint64_t current_value = counter.load(std::memory_order_relaxed);
-      uint64_t total         = current_value - last_value_printed;
-      last_value_printed     = current_value;
-      return total;
-    }
-
-    void increment(unsigned n = 1) { counter.fetch_add(n, std::memory_order_relaxed); }
-  };
-
-  srslog::basic_logger&    logger;
-  task_executor&           tx_executor;
-  task_executor&           prepare_executor;
-  task_executor&           save_executor;
+  srslog::basic_logger&   logger;
+  task_executor&          tx_executor;
+  task_executor&          prepare_executor;
   dvb_tx_sim_transceiver& transceiver;
-  dvb_tx_sim_timing_notifier& notifier;
-
-  // using ethernet_frame_buffer = static_vector<uint8_t, ETHERNET_FRAME_SIZE>;
-  using ethernet_frame_buffers = static_vector<frame_buffer, NOF_ETHERNET_FRAME_IN_AIR_FRAME>;
-  std::array<ethernet_frame_buffers, 2> pool;
+  task_executor&          save_executor;
 
   // Timing window checkers, store statistics of early/late/on-time packets.
   // RU emulator configuration.
@@ -160,41 +144,48 @@ class dvb_tx_sim : public frame_notifier, public dvb_symbol_boundary_notifier
   circular_map<unsigned, uint16_t, MAX_SUPPORTED_EAXC_ID_VALUE> seq_counters;
 
   // Other KPI counters.
-  kpi_counter rx_total_counter;
-  kpi_counter video_rx_total_counter;
-  kpi_counter tx_total_counter;
-  kpi_counter tx_bytes;
-  kpi_counter corrupt_counter;
-  kpi_counter dropped_counter;
-  std::unique_ptr<ether::frame_builder>     eth_builder;
-  unsigned nof_per_symbol;
+  kpi_counter                           rx_total_counter;
+  kpi_counter                           video_rx_total_counter;
+  kpi_counter                           tx_total_counter;
+  kpi_counter                           tx_bytes;
+  kpi_counter                           corrupt_counter;
+  kpi_counter                           dropped_counter;
+  std::unique_ptr<ether::frame_builder> eth_builder;
+  unsigned                              nof_per_symbol;
 
-  std::string input_stream_file_name;
-  std::string output_stream_file_name;
-  bool need_save_frame;
-  bool start_save_frame;
+  std::string      input_stream_file_name;
+  std::string      output_stream_file_name;
+  bool             need_save_frame;
+  bool             start_save_frame;
+  PacketQueue      packet_queue;
   MediaTransmitter media_transmitter;
+  PacketSender     packet_sender;
 
 public:
-  dvb_tx_sim(srslog::basic_logger&    logger_,
-              task_executor&          tx_executor_,
-              task_executor&          prepare_executor_,
-              task_executor&          save_executor_,
-              dvb_tx_sim_transceiver& transceiver_,
-              dvb_tx_sim_timing_notifier& notifier_,
-              dvb_tx_sim_config       cfg_) :
+  dvb_tx_sim(srslog::basic_logger&   logger_,
+             task_executor&          tx_executor_,
+             task_executor&          prepare_executor_,
+             dvb_tx_sim_transceiver& transceiver_,
+             task_executor&          save_executor_,
+             dvb_tx_sim_config       cfg_) :
     logger(logger_),
     tx_executor(tx_executor_),
     prepare_executor(prepare_executor_),
-    save_executor(save_executor_),
     transceiver(transceiver_),
-    notifier(notifier_),
+    save_executor(save_executor_),
     cfg(cfg_),
     input_stream_file_name(cfg_.input_file),
     output_stream_file_name(cfg_.output_file),
     need_save_frame(false),
     start_save_frame(false),
-    media_transmitter(logger_, input_stream_file_name, output_stream_file_name)
+    packet_queue(NOF_ETHERNET_FRAME_IN_AIR_FRAME),
+    media_transmitter(logger_,
+                      input_stream_file_name,
+                      output_stream_file_name,
+                      packet_queue,
+                      prepare_executor_,
+                      cfg_.speed_factor),
+    packet_sender(logger_, tx_executor, transceiver_, packet_queue, tx_bytes)
   {
     seq_counters.insert(0, 0);
     ether::vlan_frame_params ether_params;
@@ -208,25 +199,8 @@ public:
     } else {
       eth_builder = ether::create_frame_builder(ether_params);
     }
-  }
 
-
-  bool save_to_binary_file(const void* data_address, std::size_t data_length, const std::string& file_path) {
-    std::ofstream output_file(file_path, std::ios::out | std::ios::binary);
-
-    if (!output_file.is_open()) {
-        std::cerr << "Error: Could not open file " << file_path << " for writing." << std::endl;
-        return false;
-    }
-
-    output_file.write(reinterpret_cast<const char*>(data_address), data_length);
-
-    if (!output_file.good()) {
-        std::cerr << "Error: Failed to write to file " << file_path << "." << std::endl;
-        return false;
-    }
-
-    return true;
+    media_transmitter.set_eth_builder(eth_builder.get());
   }
 
   // See interface for documentation.
@@ -235,7 +209,7 @@ public:
     static bool save_first_frame = true;
     rx_total_counter.increment();
     if (!save_executor.defer([this, b = std::move(buffer)] {
-          size_t ether_header_size = eth_builder->get_header_size().value();
+          size_t              ether_header_size = eth_builder->get_header_size().value();
           span<const uint8_t> frame = b.data().subspan(ether_header_size, b.data().size() - ether_header_size);
           // logger.info("Received new frame of size {}, payload {}", b.data().size(), frame.size());
           if (save_first_frame) {
@@ -258,95 +232,28 @@ public:
     }
   }
 
-  void on_new_symbol(dvb_slot_symbol_point symbol_point) override
-  {
-    if (symbol_point.get_symbol_index() == 0) {
-      if (!tx_executor.execute([this, b = std::move(symbol_point)]() mutable { send_dvb_frame(std::move(b)); })) {
-        logger.warning("Failed to dispatch send task");
-      }
-    }
-    if (symbol_point.get_symbol_index() == 8) {
-      if (!prepare_executor.execute(
-              [this, b = std::move(symbol_point)]() mutable { prepare_dvb_frame(std::move(b)); })) {
-        logger.warning("Failed to dispatch prepare task");
-      }
-    }
-  }
-
-  void send_dvb_frame(dvb_slot_symbol_point symbol_point) {
-    static_vector<span<const uint8_t>, MAX_BURST_SIZE> frame_burst;
-
-    // uint8_t frame_index = symbol_point.get_frame();
-    auto buffers = pool[symbol_point.get_frame() % 1];
-
-    // if (buffers.size() != buffers.capacity()) {
-    //   logger.warning("frames are not available for sending at frame index {}, size {} expected {}", frame_index, buffers.size(), buffers.capacity());
-    //   return;
-    // }
-    for (auto& frame: buffers) {
-        frame_burst.emplace_back(frame.data());
-        tx_bytes.increment(frame.size());
-        if (frame_burst.size() >= MAX_BURST_SIZE) { 
-          transceiver.send(frame_burst);
-          tx_total_counter.increment(frame_burst.size());
-          frame_burst.clear();
-        }
-    }
-    transceiver.send(frame_burst);
-    tx_total_counter.increment(frame_burst.size());
-  }
-
-  void generate_test_frame_data(unsigned int frame_id)
-  {
-    auto& buffers = pool[frame_id % 1];
-    buffers.clear();
-
-    for (unsigned int i = 0; i < buffers.capacity(); i++) {
-      // logger.info("Preparing frame {}, buffer {} for sending", frame_id, i);
-      buffers.emplace_back(frame_buffer(ETHERNET_FRAME_SIZE));
-      auto* frame = &buffers.back();
-
-      size_t header_size  = eth_builder->get_header_size().value();
-      size_t payload_size = frame->size() - header_size;
-      eth_builder->build_frame(frame->data());
-
-      auto   payload     = frame->data().subspan(header_size, payload_size);
-      size_t filled_size = 0;
-      if (!media_transmitter.fill_payload(payload, filled_size)) {
-        buffers.pop_back();
-      } else {
-        // logger.info("Read {} bytes from video tunnel in", bytes_read);
-        frame->set_size(filled_size + header_size);
-      }
-    }
-  }
-
-  void prepare_dvb_frame(dvb_slot_symbol_point symbol_point) {
-    uint8_t frame_index = symbol_point.get_frame();
-    generate_test_frame_data(frame_index + 1);
-  }
-
   void start()
   {
-    logger.info("Starting DVB TX simulator");
-    generate_test_frame_data(0);
+    logger.info("Starting DVB TX simulator transceiver ...");
     transceiver.start(*this);
+    media_transmitter.start();
+    packet_sender.start();
   }
 
   void print_statistics(unsigned emu_id)
   {
     fmt::memory_buffer buffer;
-    static auto last_time = std::chrono::system_clock::now();
+    static auto        last_time = std::chrono::system_clock::now();
 
-    auto    now          = std::chrono::system_clock::now();
-    double seconds = std::chrono::duration<double>(now - last_time).count();
-    last_time = now;
-    std::tm current_time = fmt::gmtime(std::chrono::system_clock::to_time_t(now));
-    uint64_t rx_total  = rx_total_counter.get_value();
+    auto   now              = std::chrono::system_clock::now();
+    double seconds          = std::chrono::duration<double>(now - last_time).count();
+    last_time               = now;
+    std::tm  current_time   = fmt::gmtime(std::chrono::system_clock::to_time_t(now));
+    uint64_t rx_total       = rx_total_counter.get_value();
     uint64_t video_rx_total = video_rx_total_counter.get_value();
-    uint64_t tx_total  = tx_total_counter.get_value();
-    uint64_t malformed = corrupt_counter.get_value();
-    uint64_t dropped   = dropped_counter.get_value();
+    uint64_t tx_total       = tx_total_counter.get_value();
+    uint64_t malformed      = corrupt_counter.get_value();
+    uint64_t dropped        = dropped_counter.get_value();
     uint64_t tx_bytes_total = tx_bytes.get_value();
 
     fmt::format_to(buffer,
@@ -363,123 +270,94 @@ public:
     fmt::print(to_c_str(buffer));
   }
 
-  std::vector<dvb_symbol_boundary_notifier*> get_ota_notifiers()
-  {
-    std::vector<dvb_symbol_boundary_notifier*> notifiers;
-    notifiers.push_back(this);
-    return notifiers;
-  }
+  void save_frame() { need_save_frame = true; }
 
-  void save_frame()
-  {
-    need_save_frame = true;
-  }
 private:
-
   /// Decodes and processes received OFH message.
-  void process_new_frame(unique_rx_buffer buffer)
-  {
-
-  }
+  void process_new_frame(unique_rx_buffer buffer) {}
 };
 
 /// Manages the workers of the RU emulators.
 struct worker_manager {
   static constexpr uint32_t task_worker_queue_size = 1024;
 
-  worker_manager(unsigned nof_emulators) { create_executors(nof_emulators); }
+  worker_manager() { create_executors(); }
 
-  void create_executors(unsigned nof_emulators)
+  void create_executors()
   {
     using namespace execution_config_helper;
 
-    for (unsigned i = 0; i != nof_emulators; ++i) {
-      // Executors for Open Fronthaul messages reception.
-      {
-        const std::string name      = "dvb_sim_rx_#" + std::to_string(i);
-        const std::string exec_name = "dvb_sim_rx_exec_#" + std::to_string(i);
-
-        const single_worker dvb_worker{name,
-                                      {concurrent_queue_policy::lockfree_spsc, 2},
-                                      {{exec_name}},
-                                      std::chrono::microseconds{1},
-                                      os_thread_realtime_priority::max() - 1};
-        if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
-          report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
-        }
-        dvb_rx_exec.push_back(exec_mng.executors().at(exec_name));
-      }
-
-      // Executors for the dvb send frame.
-      {
-        const std::string   name      = "dvb_tx_sim_#" + std::to_string(i);
-        const std::string   exec_name = "dvb_tx_sim_exec_#" + std::to_string(i);
-        const single_worker dvb_worker{name,
-                                      {concurrent_queue_policy::lockfree_spsc, task_worker_queue_size},
-                                      {{exec_name}},
-                                      std::chrono::microseconds{1},
-                                      os_thread_realtime_priority::max() - 1};
-        if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
-          report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
-        }
-        dvb_tx_sims_exec.push_back(exec_mng.executors().at(exec_name));
-      }
-      // Executors for the dvb prepare frame.
-      {
-        const std::string   name      = "dvb_prep_#" + std::to_string(i);
-        const std::string   exec_name = "dvb_prep_exec_#" + std::to_string(i);
-        const single_worker dvb_worker{name,
-                                      {concurrent_queue_policy::lockfree_spsc, task_worker_queue_size},
-                                      {{exec_name}},
-                                      std::chrono::microseconds{1},
-                                      os_thread_realtime_priority::max() - 2};
-        if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
-          report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
-        }
-        dvb_prepare_frame_exec.push_back(exec_mng.executors().at(exec_name));
-      }
-      // Executors for the dvb save frame.
-      {
-        const std::string   name      = "dvb_save_#" + std::to_string(i);
-        const std::string   exec_name = "dvb_save_exec_#" + std::to_string(i);
-        const single_worker dvb_worker{name,
-                                      {concurrent_queue_policy::lockfree_spsc, task_worker_queue_size},
-                                      {{exec_name}},
-                                      std::chrono::microseconds{1},
-                                      os_thread_realtime_priority::max() - 2};
-        if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
-          report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
-        }
-        dvb_save_frame_exec.push_back(exec_mng.executors().at(exec_name));
-      }
-    }
-
-    // Timing executor.
     {
-      const std::string name      = "dvb_sim_timing";
-      const std::string exec_name = "dvb_sim_timing_exec";
+      const std::string name      = "dvb_sim_rx#";
+      const std::string exec_name = "dvb_sim_rx_exec_";
 
       const single_worker dvb_worker{name,
-                                    {concurrent_queue_policy::lockfree_spsc, 4},
-                                    {{exec_name}},
-                                    std::chrono::microseconds{1},
-                                    os_thread_realtime_priority::max() - 0};
+                                     {concurrent_queue_policy::lockfree_spsc, 2},
+                                     {{exec_name}},
+                                     std::chrono::microseconds{1},
+                                     os_thread_realtime_priority::max() - 1};
       if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
         report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
       }
-      dvb_timing_exec = exec_mng.executors().at(exec_name);
+      dvb_rx_exec = exec_mng.executors().at(exec_name);
+    }
+
+    // Executors for the dvb save frame.
+    {
+      const std::string   name      = "dvb_save";
+      const std::string   exec_name = "dvb_save_exec";
+      const single_worker dvb_worker{name,
+                                     {concurrent_queue_policy::lockfree_spsc, task_worker_queue_size},
+                                     {{exec_name}},
+                                     std::chrono::microseconds{1},
+                                     os_thread_realtime_priority::max() - 2};
+      if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
+        report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
+      }
+      dvb_save_frame_exec = exec_mng.executors().at(exec_name);
+    }
+
+    // Packet sender executor.
+    {
+      const std::string name      = "dvb_packet_sender";
+      const std::string exec_name = "dvb_packet_sender_exec";
+
+      const single_worker dvb_worker{name,
+                                     {concurrent_queue_policy::lockfree_spsc, 4},
+                                     {{exec_name}},
+                                     std::chrono::microseconds{1},
+                                     os_thread_realtime_priority::max() - 0};
+      if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
+        report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
+      }
+      packet_sender_exec = exec_mng.executors().at(exec_name);
+    }
+
+    // Packet prepare executor.
+    {
+      const std::string name      = "dvb_packet_prepare";
+      const std::string exec_name = "dvb_packet_prepare_exec";
+
+      const single_worker dvb_worker{name,
+                                     {concurrent_queue_policy::lockfree_spsc, 4},
+                                     {{exec_name}},
+                                     std::chrono::microseconds{1},
+                                     os_thread_realtime_priority::max() - 0};
+      if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
+        report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
+      }
+      packet_prepare_exec = exec_mng.executors().at(exec_name);
     }
   }
 
   void stop() { exec_mng.stop(); }
 
   task_execution_manager exec_mng;
-  task_executor*         dvb_timing_exec = nullptr;
 
-  std::vector<task_executor*> dvb_rx_exec;
-  std::vector<task_executor*> dvb_tx_sims_exec;
-  std::vector<task_executor*> dvb_prepare_frame_exec;
-  std::vector<task_executor*> dvb_save_frame_exec;
+  task_executor* dvb_rx_exec         = nullptr;
+  task_executor* dvb_save_frame_exec = nullptr;
+  task_executor* packet_sender_exec  = nullptr;
+  task_executor* packet_prepare_exec = nullptr;
 };
 
 } // namespace
@@ -503,7 +381,8 @@ static void cleanup_signal_handler()
   srslog::flush();
 }
 
-void sigpipe_handler(int signo) {
+void sigpipe_handler(int signo)
+{
   fprintf(stderr, "SIGPIPE received: Reader closed FIFO.\n");
   // You might want to set a flag or perform cleanup here
   // For this example, we'll just print a message.
@@ -560,7 +439,7 @@ int main(int argc, char** argv)
   }
 #endif
   // Create workers and executors.
-  worker_manager workers(1);
+  worker_manager workers;
 
   // Set up DPDK transceivers and create RU emulators.
   std::vector<std::unique_ptr<dvb_tx_sim_transceiver>> transceivers;
@@ -575,7 +454,7 @@ int main(int argc, char** argv)
     port_cfg.mtu_size                    = units::bytes{dvb_tx_sim_cfg.mtu};
     port_cfg.is_promiscuous_mode_enabled = dvb_tx_sim_cfg.enable_promiscuous;
     auto ctx                             = dpdk_port_context::create(port_cfg);
-    transceivers.push_back(std::make_unique<dpdk_transceiver>(logger, *workers.dvb_rx_exec[0], ctx));
+    transceivers.push_back(std::make_unique<dpdk_transceiver>(logger, *workers.dvb_rx_exec, ctx));
   } else
 #endif
   {
@@ -586,15 +465,15 @@ int main(int argc, char** argv)
     if (!parse_mac_address(dvb_tx_sim_cfg.dst_mac_address, cfg.mac_dst_address)) {
       report_error("Invalid MAC address provided: '{}'", dvb_tx_sim_cfg.dst_mac_address);
     }
-    transceivers.push_back(std::make_unique<socket_transceiver>(logger, *workers.dvb_rx_exec[0], cfg));
+    transceivers.push_back(std::make_unique<socket_transceiver>(logger, *workers.dvb_rx_exec, cfg));
   }
 
   dvb_tx_sim_config emu_cfg;
 
-  emu_cfg.nof_prb = MAX_DVB_FRAME_SIZE / 4;
-  emu_cfg.input_file = dvb_tx_sim_cfg.input_file;
-  emu_cfg.output_file = dvb_tx_sim_cfg.output_file;
-
+  emu_cfg.nof_prb      = MAX_DVB_FRAME_SIZE / 4;
+  emu_cfg.input_file   = dvb_tx_sim_cfg.input_file;
+  emu_cfg.output_file  = dvb_tx_sim_cfg.output_file;
+  emu_cfg.speed_factor = dvb_tx_sim_cfg.speed_factor;
   emu_cfg.vlan_tag     = dvb_tx_sim_cfg.vlan_tag;
   emu_cfg.mtu          = dvb_tx_sim_cfg.mtu;
   if (!parse_mac_address(dvb_tx_sim_cfg.src_mac_address, emu_cfg.src_mac)) {
@@ -606,21 +485,14 @@ int main(int argc, char** argv)
   logger.info("input video tunnel {}", dvb_tx_sim_cfg.input_file);
   logger.info("output video tunnel {}", dvb_tx_sim_cfg.output_file);
   // Create timing worker.
-  dvb_tx_sim_timing_notifier timing_notifier(logger, *workers.dvb_timing_exec, dvb_tx_sim_cfg.frame_period);
 
-  dvb_tx_sims.push_back(std::make_unique<dvb_tx_sim>(
-      logger, *workers.dvb_tx_sims_exec[0], *workers.dvb_prepare_frame_exec[0], *workers.dvb_save_frame_exec[0], *transceivers[0], timing_notifier, emu_cfg));
+  dvb_tx_sims.push_back(std::make_unique<dvb_tx_sim>(logger,
+                                                     *workers.packet_sender_exec,
+                                                     *workers.packet_prepare_exec,
+                                                     *transceivers[0],
+                                                     *workers.dvb_save_frame_exec,
+                                                     emu_cfg));
 
-  // Subscribe RU emulator window checkers to the 'OTA symbol start' notifications.
-  std::vector<dvb_symbol_boundary_notifier*> dvb_symbol_notifiers;
-  for (auto& dvb : dvb_tx_sims) {
-    auto dvb_ota_notifiers = dvb->get_ota_notifiers();
-    dvb_symbol_notifiers.insert(dvb_symbol_notifiers.end(), dvb_ota_notifiers.begin(), dvb_ota_notifiers.end());
-  }
-  timing_notifier.subscribe(dvb_symbol_notifiers);
-
-  // Start dvb emulators.
-  timing_notifier.start();
   for (auto& dvb : dvb_tx_sims) {
     dvb->start();
   }
@@ -651,7 +523,7 @@ int main(int argc, char** argv)
     }
   }
 
-  timing_notifier.stop();
+  // timing_notifier.stop();
   for (auto& txrx : transceivers) {
     txrx->stop();
   }

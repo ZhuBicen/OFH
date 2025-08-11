@@ -53,6 +53,7 @@ struct dvb_tx_sim_ofh_appconfig {
   /// input stream file
   std::string input_file;
   std::string output_file;
+  unsigned    speed_factor = 1;
 };
 
 /// RU emulator logging parameters.
