@@ -1,6 +1,7 @@
 #pragma once
 
 #include "packet_queue.h"
+#include "packet_receiver.h"
 #include "srsran/adt/span.h"
 #include "srsran/ofh/ethernet/ethernet_factories.h"
 #include "srsran/srslog/logger.h"
@@ -41,6 +42,7 @@ public:
 
 private:
   srsran::ether::frame_builder* eth_builder;
+  srsran::PacketReceiver        packet_receiver;
 
   srsran::PacketQueue&    packet_queue;
   srsran::task_executor&  executor;

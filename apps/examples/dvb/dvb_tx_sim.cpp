@@ -224,8 +224,6 @@ public:
           auto result = media_transmitter.forward_payload(frame);
           if (result == PayloadCheckResult::OK) {
             video_rx_total_counter.increment();
-          } else if (result == PayloadCheckResult::INVALID_LENGTH) {
-            save_to_binary_file(b.data().data(), b.data().size(), "malformed_frame.bin");
           }
         })) {
       logger.warning("Failed to dispatch save task");

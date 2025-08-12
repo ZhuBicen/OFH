@@ -26,6 +26,7 @@ set (SOURCES
         dvb_tx_sim_socket_transceiver.cpp
         media_transmitter.cpp
         packet_sender.cpp
+        packet_receiver.cpp
         crc16.cpp
         dvb_tx_sim.cpp)
 if (DPDK_FOUND)

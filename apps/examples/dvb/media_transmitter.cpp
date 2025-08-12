@@ -265,9 +265,6 @@ bool MediaTransmitter::fill_payload(span<uint8_t> payload, size_t& payload_size,
 
 PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload)
 {
-  if (video_tunnel_out == -1) {
-    return PayloadCheckResult::NO_VIDEO_TUNNEL;
-  }
   if (payload.size() < sizeof(Header) + sizeof(uint16_t)) {
     logger.error("Payload size is too small to contain header and CRC");
     return PayloadCheckResult::TOO_SMALL_PAYLOAD;
@@ -283,26 +280,13 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
     logger.error("Invalid sync header in payload");
     return PayloadCheckResult::INVALID_SYNC_HEADER;
   }
-  if (!last_received_sequence_id) {
-    last_received_sequence_id = seq_id;
-  } else {
-    uint16_t expected_sequence = (last_received_sequence_id.value() + 1) % UINT16_MAX;
-    if (header.sequence != expected_sequence) {
-      logger.warning("Received sequence ID {} does not match expected {}",
-                     ntohs(header.sequence),
-                     last_received_sequence_id.value());
-      last_received_sequence_id = (uint16_t)header.sequence;
-      return PayloadCheckResult::INVALID_SEQUENCE_ID;
-    }
-    last_received_sequence_id = seq_id;
-  }
-
   if (header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t) != payload.size()) {
     logger.error("Payload length mismatch: expected {}, got {}",
                  header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t),
                  payload.size());
     return PayloadCheckResult::INVALID_LENGTH;
   }
+
   if (header.media_length > 0) {
     uint16_t expected_crc = htons(get_crc(payload));
     uint16_t received_crc = *(const uint16_t*)(payload.data() + payload.size() - 2);
@@ -311,14 +295,20 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
           "Payload CRC 0x{:04X}, expected 0x{:04X}, indicating a possible corruption", received_crc, expected_crc);
       return PayloadCheckResult::INVALID_CRC;
     }
-    ssize_t bytes_written = write(video_tunnel_out, payload.data() + sizeof(Header), header.media_length);
-    if (bytes_written != header.media_length) {
-      logger.error("Failed to write to video tunnel out. Error: {}", strerror(errno));
-      return PayloadCheckResult::VIDEO_TUNNEL_BUSY;
-    }
-  } else {
-    // logger.warning("Media length is zero, nothing to write to video tunnel out");
   }
+  std::vector<uint8_t> data(payload.data() + sizeof(Header), payload.data() + sizeof(Header) + header.media_length);
+  packet_receiver.receive_packet(srsran::RxPacket(seq_id, std::move(data)));
+  const auto& sorted_packets = packet_receiver.get_sorted_packets();
+  for (const auto& rx_packet : sorted_packets) {
+    if (rx_packet.data.size() != 0) {
+      ssize_t bytes_written = write(video_tunnel_out, rx_packet.data.data(), rx_packet.data.size());
+      if (bytes_written != header.media_length) {
+        logger.error("Failed to write to video tunnel out. Error: {}", strerror(errno));
+        return PayloadCheckResult::VIDEO_TUNNEL_BUSY;
+      }
+    }
+  }
+
   return PayloadCheckResult::OK;
 }
 
