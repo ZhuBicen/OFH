@@ -184,7 +184,8 @@ public:
                       output_stream_file_name,
                       packet_queue,
                       prepare_executor_,
-                      cfg_.speed_factor),
+                      cfg_.speed_factor,
+                      corrupt_counter),
     packet_sender(logger_, tx_executor, transceiver_, packet_queue, tx_bytes)
   {
     seq_counters.insert(0, 0);

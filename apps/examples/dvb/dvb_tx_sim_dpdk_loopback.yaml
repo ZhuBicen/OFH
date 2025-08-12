@@ -17,5 +17,7 @@ dvb_tx_sim:
       # frame_period: 3320832
       input_file: /tmp/input_stream
       output_file: /tmp/output_stream
+      speed_factor: 1000                       # Speed factor for simulation
+
 dpdk:
-   eal_args: "--lcores (0-1)@(0-15) --proc-type=auto"
+   eal_args: "--lcores (0-3)@(0-15) --proc-type=auto"

@@ -90,7 +90,8 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
                                    const std::string&     output_stream,
                                    srsran::PacketQueue&   packet_queue_,
                                    srsran::task_executor& executor_,
-                                   uint16_t               speed_factor_) :
+                                   uint16_t               speed_factor_,
+                                   kpi_counter&           nof_buffered_packets) :
   packet_queue(packet_queue_),
   executor(executor_),
   input_stream_file_name(input_stream),
@@ -98,7 +99,8 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   video_tunnel_in(-1),
   video_tunnel_out(-1),
   logger(logger_),
-  speed_factor(speed_factor_)
+  speed_factor(speed_factor_),
+  buffered_packet_num(nof_buffered_packets)
 {
   // Initialize video tunnels
   if (!open_video_tunnel_in() || !open_video_tunnel_out()) {
@@ -298,13 +300,17 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
   }
   std::vector<uint8_t> data(payload.data() + sizeof(Header), payload.data() + sizeof(Header) + header.media_length);
   packet_receiver.receive_packet(srsran::RxPacket(seq_id, std::move(data)));
+  buffered_packet_num.get_value();
+  buffered_packet_num.increment(packet_receiver.get_buffered_packet_num());
   const auto& sorted_packets = packet_receiver.get_sorted_packets();
   for (const auto& rx_packet : sorted_packets) {
     if (rx_packet.data.size() != 0) {
       ssize_t bytes_written = write(video_tunnel_out, rx_packet.data.data(), rx_packet.data.size());
-      if (bytes_written != header.media_length) {
-        logger.error("Failed to write to video tunnel out. Error: {}", strerror(errno));
-        return PayloadCheckResult::VIDEO_TUNNEL_BUSY;
+      if (bytes_written != (ssize_t)rx_packet.data.size()) {
+        logger.error("Failed to write to video tunnel out. Error: {}, write {}, expecte {}",
+                     strerror(errno),
+                     bytes_written,
+                     rx_packet.data.size());
       }
     }
   }

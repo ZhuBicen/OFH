@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kpi_counter.h"
 #include "packet_queue.h"
 #include "packet_receiver.h"
 #include "srsran/adt/span.h"
@@ -32,7 +33,8 @@ public:
                    const std::string&     output_stream,
                    srsran::PacketQueue&   packet_queue_,
                    srsran::task_executor& executor,
-                   uint16_t               speed_factor);
+                   uint16_t               speed_factor,
+                   kpi_counter&           nof_buffered_packets);
   void set_eth_builder(srsran::ether::frame_builder* eth_builder_) { eth_builder = eth_builder_; }
   ~MediaTransmitter();
   void start();
@@ -54,7 +56,8 @@ private:
   uint16_t                sequence_id = 0;
   std::optional<uint16_t> last_received_sequence_id;
 
-  uint16_t speed_factor;
+  uint16_t     speed_factor;
+  kpi_counter& buffered_packet_num;
 
   bool open_video_tunnel_in();
   bool open_video_tunnel_out();
