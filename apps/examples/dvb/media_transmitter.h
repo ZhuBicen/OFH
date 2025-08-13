@@ -34,7 +34,8 @@ public:
                    srsran::PacketQueue&   packet_queue_,
                    srsran::task_executor& executor,
                    uint16_t               speed_factor,
-                   kpi_counter&           nof_buffered_packets);
+                   kpi_counter&           tx_video_packet_counter_,
+                   kpi_counter&           tx_dummy_packet_counter_);
   void set_eth_builder(srsran::ether::frame_builder* eth_builder_) { eth_builder = eth_builder_; }
   ~MediaTransmitter();
   void start();
@@ -57,7 +58,8 @@ private:
   std::optional<uint16_t> last_received_sequence_id;
 
   uint16_t     speed_factor;
-  kpi_counter& buffered_packet_num;
+  kpi_counter& tx_video_packet_counter;
+  kpi_counter& tx_dummy_packet_counter;
 
   bool open_video_tunnel_in();
   bool open_video_tunnel_out();

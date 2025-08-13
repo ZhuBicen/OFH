@@ -91,7 +91,9 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
                                    srsran::PacketQueue&   packet_queue_,
                                    srsran::task_executor& executor_,
                                    uint16_t               speed_factor_,
-                                   kpi_counter&           nof_buffered_packets) :
+                                   kpi_counter&           tx_video_packet_counter_,
+                                   kpi_counter&           tx_dummy_packet_counter_) :
+  packet_receiver(logger_),
   packet_queue(packet_queue_),
   executor(executor_),
   input_stream_file_name(input_stream),
@@ -100,7 +102,8 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   video_tunnel_out(-1),
   logger(logger_),
   speed_factor(speed_factor_),
-  buffered_packet_num(nof_buffered_packets)
+  tx_video_packet_counter(tx_video_packet_counter_),
+  tx_dummy_packet_counter(tx_dummy_packet_counter_)
 {
   // Initialize video tunnels
   if (!open_video_tunnel_in() || !open_video_tunnel_out()) {
@@ -155,7 +158,8 @@ void MediaTransmitter::start()
 
 void MediaTransmitter::generate_media()
 {
-  static bool save_first_packet = true;
+  static bool save_first_packet       = true;
+  uint16_t    avaliable_media_packets = 0;
   while (true) {
     if (video_tunnel_in == -1) {
       std::this_thread::sleep_for(std::chrono::seconds(3));
@@ -177,8 +181,11 @@ void MediaTransmitter::generate_media()
       if (!packet_queue.try_push(std::move(packet))) {
         logger.error("Failed to push media payload to packet queue, queue might be full");
       }
+      tx_video_packet_counter.increment();
+      avaliable_media_packets++;
       // If speed factor is greater than 1, fill the payload with dummy data
-      for (uint16_t i = 0; i < speed_factor - 1; ++i) {
+      for (uint16_t i = 0; i < avaliable_media_packets * (speed_factor - 1); ++i) {
+        tx_dummy_packet_counter.increment();
         srsran::Packet packet2 = std::make_shared<std::vector<uint8_t>>(ETHERNET_FRAME_SIZE);
         packet2->resize(ETHERNET_FRAME_SIZE, 0);
         size_t header_size2 = eth_builder->get_header_size().value();
@@ -193,6 +200,7 @@ void MediaTransmitter::generate_media()
           break;
         }
       }
+      avaliable_media_packets = 0;
     }
   }
 }
@@ -286,6 +294,7 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
     logger.error("Payload length mismatch: expected {}, got {}",
                  header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t),
                  payload.size());
+    save_to_binary_file(payload.data(), payload.size(), "mismatched_length.bin");
     return PayloadCheckResult::INVALID_LENGTH;
   }
 
@@ -300,8 +309,6 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
   }
   std::vector<uint8_t> data(payload.data() + sizeof(Header), payload.data() + sizeof(Header) + header.media_length);
   packet_receiver.receive_packet(srsran::RxPacket(seq_id, std::move(data)));
-  buffered_packet_num.get_value();
-  buffered_packet_num.increment(packet_receiver.get_buffered_packet_num());
   const auto& sorted_packets = packet_receiver.get_sorted_packets();
   for (const auto& rx_packet : sorted_packets) {
     if (rx_packet.data.size() != 0) {

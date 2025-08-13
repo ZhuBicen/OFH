@@ -3,7 +3,7 @@
 
 using namespace srsran;
 
-PacketReceiver::PacketReceiver() : expected_seq(0)
+PacketReceiver::PacketReceiver(srslog::basic_logger& logger_) : expected_seq(0), logger(logger_)
 {
   last_packet_time = std::chrono::steady_clock::now();
 }
@@ -20,12 +20,17 @@ bool PacketReceiver::receive_packet(RxPacket&& rxPacket)
     last_packet_time = std::chrono::steady_clock::now();
     return true;
   } else if (is_seq_greater(rxPacket.sequence_number, expected_seq)) {
+    // logger.warning(
+    //     "Out of order seq num, cache it, expected: {}, received: {}", expected_seq, rxPacket.sequence_number);
     packet_queue.push(rxPacket);
     last_packet_time = std::chrono::steady_clock::now();
     return true;
   } else {
-    std::cout << "Discarding old packet: seq=" << rxPacket.sequence_number << ", expected=" << expected_seq
-              << ", buffered=" << packet_queue.size() << ",top" << packet_queue.top().sequence_number << "\n";
+    logger.error("Discarding old packet: seq= {}, , expected= {}, buffered={}, top={}",
+                 rxPacket.sequence_number,
+                 expected_seq,
+                 packet_queue.size(),
+                 packet_queue.top().sequence_number);
     last_packet_time = std::chrono::steady_clock::now();
     return false;
   }
@@ -45,8 +50,8 @@ std::vector<RxPacket> PacketReceiver::get_sorted_packets()
       packet_queue.pop();
       expected_seq = (expected_seq + 1) % UINT16_MAX;
     } else if (timeout || packet_queue.size() >= MAX_GAP) {
-      std::cout << "Detected packet loss: seq=" << expected_seq << ", top:" << top.sequence_number
-                << ", buffered:" << packet_queue.size() << "\n";
+      logger.error(
+          "Detected packet loss: seq= {}, top={}, buffered={}", expected_seq, top.sequence_number, packet_queue.size());
       expected_seq = top.sequence_number;
       sorted_packets.push_back(std::move(top));
       packet_queue.pop();

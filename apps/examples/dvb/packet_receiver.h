@@ -1,5 +1,6 @@
 #pragma once
 #include "srsran/ofh/ethernet/ethernet_unique_buffer.h"
+#include "srsran/srslog/logger.h"
 
 #include <chrono>
 #include <queue>
@@ -35,9 +36,10 @@ private:
 
 public:
   int get_buffered_packet_num() { return packet_queue.size(); }
-  PacketReceiver();
+  PacketReceiver(srslog::basic_logger& logger);
   bool                  receive_packet(RxPacket&& packet);
   std::vector<RxPacket> get_sorted_packets();
   bool                  has_pending_packets() const;
+  srslog::basic_logger& logger;
 };
 } // namespace srsran

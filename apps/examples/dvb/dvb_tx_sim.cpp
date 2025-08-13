@@ -185,7 +185,8 @@ public:
                       packet_queue,
                       prepare_executor_,
                       cfg_.speed_factor,
-                      corrupt_counter),
+                      corrupt_counter,
+                      dropped_counter),
     packet_sender(logger_, tx_executor, transceiver_, packet_queue, tx_bytes)
   {
     seq_counters.insert(0, 0);
