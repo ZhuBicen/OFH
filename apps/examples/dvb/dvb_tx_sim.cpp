@@ -250,21 +250,17 @@ public:
     last_time               = now;
     std::tm  current_time   = fmt::gmtime(std::chrono::system_clock::to_time_t(now));
     uint64_t rx_total       = rx_total_counter.get_value();
-    uint64_t video_rx_total = video_rx_total_counter.get_value();
-    uint64_t tx_total       = tx_total_counter.get_value();
     uint64_t malformed      = corrupt_counter.get_value();
     uint64_t dropped        = dropped_counter.get_value();
     uint64_t tx_bytes_total = tx_bytes.get_value();
 
     fmt::format_to(buffer,
-                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | \n",
+                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} |\n",
                    current_time,
                    emu_id,
                    rx_total,
                    malformed,
                    dropped,
-                   tx_total,
-                   video_rx_total,
                    formatDataSpeed(tx_bytes_total * 8 / seconds));
 
     fmt::print(to_c_str(buffer));
@@ -502,10 +498,9 @@ int main(int argc, char** argv)
              "TIME",
              "ID",
              "RX_TOTAL",
-             "RX_CORRUPT",
-             "RX_ERR_DROP",
-             "TX_TOTAL",
-             "RX_VIDEO");
+             "TX_VIDEO",
+             "TX_DUMMY",
+             "BITRATE");
   std::string input;
   while (is_app_running) {
     for (unsigned i = 0, e = dvb_tx_sims.size(); i != e; ++i) {
