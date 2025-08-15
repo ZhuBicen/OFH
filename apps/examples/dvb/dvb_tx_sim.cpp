@@ -80,7 +80,7 @@ static constexpr unsigned MAX_SAVE_FRAME = 8;
 
 static constexpr unsigned MAX_DVB_FRAME_SIZE = 451584;
 
-static constexpr unsigned NOF_ETHERNET_FRAME_IN_AIR_FRAME = 1000;
+static constexpr unsigned NOF_ETHERNET_FRAME_IN_AIR_FRAME = 3000;
 
 #include <iomanip>
 #include <sstream>

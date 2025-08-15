@@ -3,6 +3,7 @@
 #include "crc16.h"
 
 #include <arpa/inet.h>
+#include <array>
 #include <fcntl.h>
 #include <fstream>
 #include <future>
@@ -76,14 +77,53 @@ bool save_to_binary_file(const void* data_address, std::size_t data_length, cons
   return true;
 }
 
-struct Header {
-  uint32_t sync_header;
-  uint16_t length;
-  uint16_t sequence;
-  uint16_t media_length;
-} __attribute__((packed));
-
 uint32_t SYNC_HEAD = 0x1ACFFC1D;
+
+std::array<uint16_t, UINT16_MAX> g_dummy_packets_crc;
+
+static uint16_t get_crc(const span<const uint8_t>& payload, uint16_t seq, bool dummy = false)
+{
+  if (dummy) {
+    return g_dummy_packets_crc[seq];
+  }
+  return crc16_4bytes_optimized(payload.data(), payload.size(), 0);
+}
+
+static void fill_dummy_payload(uint8_t* payload, size_t size)
+{
+  for (size_t i = 0; i < size; ++i) {
+    payload[i] = 0x5a;
+  }
+}
+
+void MediaTransmitter::create_dummy_ethernet_frame()
+{
+  dummy_ethernet_frame = std::make_shared<std::vector<uint8_t>>(ETHERNET_FRAME_SIZE);
+  dummy_ethernet_frame->resize(ETHERNET_FRAME_SIZE, 0);
+  size_t header_size = eth_builder->get_header_size().value();
+  eth_builder->build_frame({dummy_ethernet_frame->data(), dummy_ethernet_frame->size()});
+  span<uint8_t> payload(dummy_ethernet_frame->data() + header_size, dummy_ethernet_frame->size() - header_size);
+  auto          h = fill_media(dummy_ethernet_frame, true);
+  // seq need to be adjusted
+  fill_header(dummy_ethernet_frame, *h);
+}
+
+void MediaTransmitter::calcaute_dummy_packet_crc()
+{
+  size_t   eth_header = eth_builder->get_header_size().value();
+  auto     header     = (struct Header*)(dummy_ethernet_frame->data() + eth_header);
+  uint16_t length     = ntohs(header->length);
+  std::cout << __FUNCTION__ << length << std::endl;
+
+  span<uint8_t> crc_payload(dummy_ethernet_frame->data() + eth_header + sizeof(SYNC_HEAD), length);
+  for (int i = 0; i < UINT16_MAX; i++) {
+    fill_dummy_packet_seq({dummy_ethernet_frame->data(), dummy_ethernet_frame->size()}, i);
+    g_dummy_packets_crc[i] = get_crc(crc_payload, i, false);
+    if (i % 10000 == 0) {
+      logger.info("Calculating dummy packet seq {}, crc {}", i, g_dummy_packets_crc[i]);
+    }
+  }
+}
 
 MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
                                    const std::string&     input_stream,
@@ -115,6 +155,16 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
               speed_factor);
 }
 
+void MediaTransmitter::set_eth_builder(srsran::ether::frame_builder* eth_builder_)
+{
+  eth_builder     = eth_builder_;
+  ether_head_size = eth_builder->get_header_size().value();
+  create_dummy_ethernet_frame();
+  logger.info("dummy packet created");
+  calcaute_dummy_packet_crc();
+  logger.info("dummy packet crc generated");
+}
+
 MediaTransmitter::~MediaTransmitter()
 {
   if (video_tunnel_in != -1) {
@@ -122,20 +172,6 @@ MediaTransmitter::~MediaTransmitter()
   }
   if (video_tunnel_out != -1) {
     close(video_tunnel_out);
-  }
-}
-
-static uint16_t get_crc(const span<const uint8_t>& payload)
-{
-  const Header* header = reinterpret_cast<const Header*>(payload.data());
-  uint16_t      length = ntohs(header->length);
-  return crc16_4bytes_optimized(payload.data() + sizeof(Header::sync_header), length, 0);
-}
-
-static void fill_dummy_payload(uint8_t* payload, size_t size)
-{
-  for (size_t i = 0; i < size; ++i) {
-    payload[i] = 0x5a;
   }
 }
 
@@ -156,10 +192,27 @@ void MediaTransmitter::start()
   logger.info("Media producer started successfully");
 }
 
+void MediaTransmitter::fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq)
+{
+  size_t   eth_header = eth_builder->get_header_size().value();
+  uint16_t sequence   = htons(seq);
+  memcpy(payload.data() + eth_header + sizeof(SYNC_HEAD) + sizeof(Header::length), &sequence, sizeof(seq));
+}
+
+void MediaTransmitter::fill_crc(span<uint8_t> payload, bool dummy)
+{
+  size_t   eth_header = eth_builder->get_header_size().value();
+  auto     header     = (struct Header*)(payload.data() + eth_header);
+  uint16_t length     = ntohs(header->length);
+  uint16_t seq        = ntohs(header->sequence);
+  uint16_t crc        = ntohs(get_crc({payload.data() + eth_header + sizeof(SYNC_HEAD), length}, seq, dummy));
+  memcpy(payload.data() + eth_header + sizeof(SYNC_HEAD) + sizeof(Header::length) + length, &crc, sizeof(crc));
+}
+
 void MediaTransmitter::generate_media()
 {
-  static bool save_first_packet       = true;
-  uint16_t    avaliable_media_packets = 0;
+  static bool save_first_video_packet = true;
+  static bool save_first_dummy_packet = true;
   while (true) {
     if (video_tunnel_in == -1) {
       std::this_thread::sleep_for(std::chrono::seconds(3));
@@ -168,39 +221,42 @@ void MediaTransmitter::generate_media()
     }
     srsran::Packet packet = std::make_shared<std::vector<uint8_t>>(ETHERNET_FRAME_SIZE);
     packet->resize(ETHERNET_FRAME_SIZE, 0);
-    size_t header_size = eth_builder->get_header_size().value();
     eth_builder->build_frame({packet->data(), packet->size()});
 
-    size_t filled_size = 0;
-    if (fill_payload({packet->data() + header_size, packet->size() - header_size}, filled_size, false)) {
-      packet->resize(header_size + filled_size);
-      if (save_first_packet) {
+    if (auto h = fill_media(packet, false); h) {
+      if (h->length < 38) {
+        h->length = 38;
+      }
+      packet->resize(ether_head_size + sizeof(SYNC_HEAD) + sizeof(Header::length) + h->length + sizeof(uint16_t),
+                     false);
+      h->sequence = sequence_id;
+      sequence_id = (sequence_id + 1) % UINT16_MAX;
+      fill_header(packet, *h);
+      fill_crc({packet->data(), packet->size()}, false);
+      if (save_first_video_packet) {
         save_to_binary_file(packet->data(), packet->size(), "first_send_packet.bin");
-        save_first_packet = false;
+        save_first_video_packet = false;
       }
       if (!packet_queue.try_push(std::move(packet))) {
         logger.error("Failed to push media payload to packet queue, queue might be full");
       }
       tx_video_packet_counter.increment();
-      avaliable_media_packets++;
-      // If speed factor is greater than 1, fill the payload with dummy data
-      for (uint16_t i = 0; i < avaliable_media_packets * (speed_factor - 1); ++i) {
+      for (uint16_t i = 0; i < (speed_factor - 1); ++i) {
         tx_dummy_packet_counter.increment();
-        srsran::Packet packet2 = std::make_shared<std::vector<uint8_t>>(ETHERNET_FRAME_SIZE);
-        packet2->resize(ETHERNET_FRAME_SIZE, 0);
-        size_t header_size2 = eth_builder->get_header_size().value();
-        eth_builder->build_frame({packet2->data(), packet2->size()});
-        if (fill_payload({packet2->data() + header_size2, packet2->size() - header_size2}, filled_size, true)) {
-          packet2->resize(header_size2 + filled_size);
-          if (!packet_queue.try_push(std::move(packet2))) {
-            logger.error("Failed to push media payload to packet queue, queue might be full");
-          }
-        } else {
-          logger.error("Failed to fill payload with dummy data");
-          break;
+        auto p = std::make_shared<std::vector<uint8_t>>(*dummy_ethernet_frame.get());
+
+        fill_dummy_packet_seq({p->data(), p->size()}, sequence_id);
+        sequence_id = (sequence_id + 1) % UINT16_MAX;
+        fill_crc({p->data(), p->size()}, true);
+
+        if (save_first_dummy_packet) {
+          save_to_binary_file(p->data(), p->size(), "first_dummy_packet.bin");
+          save_first_dummy_packet = false;
+        }
+        if (!packet_queue.try_push(std::move(p))) {
+          logger.error("Failed to push media payload to packet queue, queue might be full");
         }
       }
-      avaliable_media_packets = 0;
     }
   }
 }
@@ -212,65 +268,54 @@ ssize_t fake_read(int fd, void* buf, size_t count)
   return static_cast<ssize_t>(count);
 }
 
-bool MediaTransmitter::fill_payload(span<uint8_t> payload, size_t& payload_size, bool dummy)
+/**
+ * didn't fill crc
+ */
+std::optional<Header> MediaTransmitter::fill_media(srsran::Packet packet, bool dummy)
 {
-  static bool print_first_header = true;
   if (video_tunnel_in == -1) {
-    return false;
+    return std::nullopt;
   }
-  srsran_assert(payload.size() > sizeof(Header) + sizeof(uint16_t), "Payload size must be larger than Header size");
+  srsran_assert(packet->size() > ether_head_size + sizeof(Header) + sizeof(uint16_t),
+                "Payload size must be larger than Header size");
+  // media payload include media media data, not including media length
+  span<uint8_t> media_payload(packet->data() + ether_head_size + sizeof(Header),
+                              packet->size() - ether_head_size - sizeof(Header) - CRC_LENGTH);
+  auto          reader = dummy ? fake_read : read;
 
-  span<uint8_t> media = payload.subspan(sizeof(Header), payload.size() - sizeof(Header) - sizeof(uint16_t));
-
-  ssize_t bytes_read = 0;
-  if (dummy) {
-    bytes_read = fake_read(video_tunnel_in, media.data(), media.size());
-  } else {
-    bytes_read = read(video_tunnel_in, media.data(), media.size());
-  }
+  ssize_t bytes_read = reader(video_tunnel_in, media_payload.data(), media_payload.size());
   if (bytes_read == 0) {
     // logger.info("No data read from video tunnel in, possibly EOF or no data available.");
-    payload_size = 0;
     open_video_tunnel_in();
-    return false;
+    return std::nullopt;
   }
-  uint16_t media_size = 0;
   if (bytes_read < 0) {
-    return false;
-  } else {
-    media_size = dummy ? 0 : static_cast<uint16_t>(bytes_read);
+    return std::nullopt;
   }
 
   struct Header header;
-  header.sync_header      = htonl(SYNC_HEAD);
-  uint16_t length         = sizeof(header.sequence) + sizeof(header.media_length) + static_cast<uint16_t>(bytes_read);
-  uint16_t padding_length = 0;
-  if (length < 38) {
-    padding_length = 38 - length;
-  }
-  header.length       = htons(length + padding_length);
-  header.sequence     = htons(sequence_id);
-  header.media_length = htons(media_size);
-  memcpy(payload.data(), &header, sizeof(header));
+  header.sync_header    = SYNC_HEAD;
+  const uint16_t length = sizeof(header.sequence) + sizeof(header.media_length) + static_cast<uint16_t>(bytes_read);
+  header.length         = length;
+  header.sequence       = 0;
+  header.media_length   = dummy ? 0 : bytes_read;
+  return header;
+}
 
-  sequence_id = (sequence_id + 1) % UINT16_MAX;
+static struct Header headerToNetworkByte(const struct Header& header)
+{
+  struct Header h;
+  h.sync_header  = htonl(SYNC_HEAD);
+  h.length       = htons(header.length);
+  h.sequence     = htons(header.sequence);
+  h.media_length = htons(header.media_length);
+  return h;
+}
 
-  const uint16_t crc = htons(get_crc(payload));
-  memcpy(payload.data() + sizeof(header) + bytes_read + padding_length, &crc, sizeof(crc));
-
-  if (print_first_header) {
-    logger.info(
-        "Filling payload with header: sync_header=0x{:08X}, length={}, sequence={}, media_length={}, crc=0x{:04X}",
-        ntohl(header.sync_header),
-        ntohs(header.length),
-        ntohs(header.sequence),
-        ntohs(header.media_length),
-        crc);
-    print_first_header = false;
-  }
-
-  payload_size = static_cast<size_t>(sizeof(header) + bytes_read + padding_length + sizeof(crc));
-  return true;
+void MediaTransmitter::fill_header(srsran::Packet packet, Header& header)
+{
+  auto h = headerToNetworkByte(header);
+  memcpy(packet->data() + ether_head_size, &h, sizeof(h));
 }
 
 PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload)
@@ -298,15 +343,17 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
     return PayloadCheckResult::INVALID_LENGTH;
   }
 
-  if (header.media_length > 0) {
-    uint16_t expected_crc = htons(get_crc(payload));
-    uint16_t received_crc = *(const uint16_t*)(payload.data() + payload.size() - 2);
-    if (received_crc != expected_crc) {
-      logger.error(
-          "Payload CRC 0x{:04X}, expected 0x{:04X}, indicating a possible corruption", received_crc, expected_crc);
-      return PayloadCheckResult::INVALID_CRC;
-    }
+  uint16_t expected_crc =
+      htons(get_crc({payload.data() + sizeof(SYNC_HEAD), header.length}, header.sequence, header.media_length == 0));
+  uint16_t received_crc = *(const uint16_t*)(payload.data() + payload.size() - 2);
+  if (received_crc != expected_crc) {
+    logger.error("Payload {}, crc 0x{:04X}, expected crc 0x{:04X}, indicating a possible corruption",
+                 seq_id,
+                 received_crc,
+                 expected_crc);
+    return PayloadCheckResult::INVALID_CRC;
   }
+
   std::vector<uint8_t> data(payload.data() + sizeof(Header), payload.data() + sizeof(Header) + header.media_length);
   packet_receiver.receive_packet(srsran::RxPacket(seq_id, std::move(data)));
   const auto& sorted_packets = packet_receiver.get_sorted_packets();

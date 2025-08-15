@@ -8,6 +8,7 @@
 #include "srsran/srslog/logger.h"
 #include "srsran/support/executors/task_executor.h"
 
+#include <memory>
 #include <optional>
 #include <stdint.h>
 #include <string>
@@ -25,6 +26,13 @@ enum class PayloadCheckResult {
   INVALID_CRC,
 };
 
+struct Header {
+  uint32_t sync_header;
+  uint16_t length;
+  uint16_t sequence;
+  uint16_t media_length;
+} __attribute__((packed));
+
 class MediaTransmitter
 {
 public:
@@ -36,12 +44,13 @@ public:
                    uint16_t               speed_factor,
                    kpi_counter&           tx_video_packet_counter_,
                    kpi_counter&           tx_dummy_packet_counter_);
-  void set_eth_builder(srsran::ether::frame_builder* eth_builder_) { eth_builder = eth_builder_; }
+  void set_eth_builder(srsran::ether::frame_builder* eth_builder_);
   ~MediaTransmitter();
   void start();
 
-  bool               fill_payload(span<uint8_t> payload, size_t& payload_size, bool dummy = false);
-  PayloadCheckResult forward_payload(span<const uint8_t> payload);
+  std::optional<Header> fill_media(srsran::Packet packet, bool dummy);
+  void                  fill_header(srsran::Packet packet, struct Header& header);
+  PayloadCheckResult    forward_payload(span<const uint8_t> payload);
 
 private:
   srsran::ether::frame_builder* eth_builder;
@@ -64,6 +73,14 @@ private:
   bool open_video_tunnel_in();
   bool open_video_tunnel_out();
   void generate_media();
+  void calcaute_dummy_packet_crc();
+  void create_dummy_ethernet_frame();
+  void fill_crc(span<uint8_t> payload, bool dummy);
+  void fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq);
+
+  srsran::Packet       dummy_ethernet_frame;
+  uint16_t             ether_head_size = 0;
+  static constexpr int CRC_LENGTH      = sizeof(uint16_t);
 };
 
 bool save_to_binary_file(const void* data_address, std::size_t data_length, const std::string& file_path);
