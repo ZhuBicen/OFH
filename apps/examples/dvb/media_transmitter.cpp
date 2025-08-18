@@ -199,6 +199,25 @@ void MediaTransmitter::fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq
   memcpy(payload.data() + eth_header + sizeof(SYNC_HEAD) + sizeof(Header::length), &sequence, sizeof(seq));
 }
 
+void MediaTransmitter::push_dummy_packet()
+{
+  static bool save_first_dummy_packet = false;
+  tx_dummy_packet_counter.increment();
+  auto p = std::make_shared<std::vector<uint8_t>>(*dummy_ethernet_frame.get());
+
+  fill_dummy_packet_seq({p->data(), p->size()}, sequence_id);
+  sequence_id = (sequence_id + 1) % UINT16_MAX;
+  fill_crc({p->data(), p->size()}, true);
+
+  if (save_first_dummy_packet) {
+    save_to_binary_file(p->data(), p->size(), "first_dummy_packet.bin");
+    save_first_dummy_packet = false;
+  }
+  if (!packet_queue.try_push(std::move(p))) {
+    logger.error("Failed to push media payload to packet queue, queue might be full");
+  }
+}
+
 void MediaTransmitter::fill_crc(span<uint8_t> payload, bool dummy)
 {
   size_t   eth_header = eth_builder->get_header_size().value();
@@ -212,7 +231,9 @@ void MediaTransmitter::fill_crc(span<uint8_t> payload, bool dummy)
 void MediaTransmitter::generate_media()
 {
   static bool save_first_video_packet = true;
-  static bool save_first_dummy_packet = true;
+  for (int i = 0; i < 10; i++) {
+    push_dummy_packet();
+  }
   while (true) {
     if (video_tunnel_in == -1) {
       std::this_thread::sleep_for(std::chrono::seconds(3));
@@ -242,20 +263,7 @@ void MediaTransmitter::generate_media()
       }
       tx_video_packet_counter.increment();
       for (uint16_t i = 0; i < (speed_factor - 1); ++i) {
-        tx_dummy_packet_counter.increment();
-        auto p = std::make_shared<std::vector<uint8_t>>(*dummy_ethernet_frame.get());
-
-        fill_dummy_packet_seq({p->data(), p->size()}, sequence_id);
-        sequence_id = (sequence_id + 1) % UINT16_MAX;
-        fill_crc({p->data(), p->size()}, true);
-
-        if (save_first_dummy_packet) {
-          save_to_binary_file(p->data(), p->size(), "first_dummy_packet.bin");
-          save_first_dummy_packet = false;
-        }
-        if (!packet_queue.try_push(std::move(p))) {
-          logger.error("Failed to push media payload to packet queue, queue might be full");
-        }
+        push_dummy_packet();
       }
     }
   }

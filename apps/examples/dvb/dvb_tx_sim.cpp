@@ -215,12 +215,13 @@ public:
           span<const uint8_t> frame = b.data().subspan(ether_header_size, b.data().size() - ether_header_size);
           // logger.info("Received new frame of size {}, payload {}", b.data().size(), frame.size());
           if (save_first_frame) {
-            save_to_binary_file(b.data().data(), b.data().size(), "received_frame.bin");
             save_first_frame = false;
+            logger.info("Saving first received frame to 'received_frame.bin'");
+            save_to_binary_file(b.data().data(), b.data().size(), "received_frame.bin");
             logger.info("Saved first received frame to 'received_frame.bin'");
+
             media_transmitter.forward_payload(frame);
             video_rx_total_counter.increment();
-            logger.info("Saved first received frame to 'received_frame.bin' done");
             return;
           }
           auto result = media_transmitter.forward_payload(frame);

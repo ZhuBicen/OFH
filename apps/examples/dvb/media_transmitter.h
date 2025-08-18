@@ -78,6 +78,8 @@ private:
   void fill_crc(span<uint8_t> payload, bool dummy);
   void fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq);
 
+  void push_dummy_packet();
+
   srsran::Packet       dummy_ethernet_frame;
   uint16_t             ether_head_size = 0;
   static constexpr int CRC_LENGTH      = sizeof(uint16_t);
