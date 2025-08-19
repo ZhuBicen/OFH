@@ -80,6 +80,8 @@ private:
 
   void push_dummy_packet();
 
+  void push_packet_to_send_queue(srsran::Packet packet);
+
   srsran::Packet       dummy_ethernet_frame;
   uint16_t             ether_head_size = 0;
   static constexpr int CRC_LENGTH      = sizeof(uint16_t);

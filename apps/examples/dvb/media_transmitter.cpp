@@ -146,8 +146,12 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   tx_dummy_packet_counter(tx_dummy_packet_counter_)
 {
   // Initialize video tunnels
-  if (!open_video_tunnel_in() || !open_video_tunnel_out()) {
-    logger.error("Failed to open video tunnels");
+  if (!open_video_tunnel_in()) {
+    logger.error("Failed to open video in tunnels");
+  }
+  while (!open_video_tunnel_out()) {
+    logger.info("Failed to open video out tunnels, please start fifo_to_tcp program");
+    std::this_thread::sleep_for(std::chrono::seconds(5));
   }
   logger.info("MediaTransmitter initialized with input: {}, output: {}, speed factor: {}",
               input_stream_file_name,
@@ -213,8 +217,15 @@ void MediaTransmitter::push_dummy_packet()
     save_to_binary_file(p->data(), p->size(), "first_dummy_packet.bin");
     save_first_dummy_packet = false;
   }
-  if (!packet_queue.try_push(std::move(p))) {
-    logger.error("Failed to push media payload to packet queue, queue might be full");
+  push_packet_to_send_queue(p);
+}
+
+void MediaTransmitter::push_packet_to_send_queue(srsran::Packet packet)
+{
+  for (;;) {
+    if (packet_queue.try_push(packet)) {
+      break;
+    }
   }
 }
 
@@ -258,9 +269,7 @@ void MediaTransmitter::generate_media()
         save_to_binary_file(packet->data(), packet->size(), "first_send_packet.bin");
         save_first_video_packet = false;
       }
-      if (!packet_queue.try_push(std::move(packet))) {
-        logger.error("Failed to push media payload to packet queue, queue might be full");
-      }
+      push_packet_to_send_queue(packet);
       tx_video_packet_counter.increment();
       for (uint16_t i = 0; i < (speed_factor - 1); ++i) {
         push_dummy_packet();
@@ -412,7 +421,7 @@ bool MediaTransmitter::open_video_tunnel_out()
   }
   video_tunnel_out = open(output_stream_file_name.c_str(), O_WRONLY | O_NONBLOCK);
   if (video_tunnel_out == -1) {
-    // logger.warning("Failed to open out video tunnel. Error: {}", strerror(errno));
+    logger.warning("Failed to open out video tunnel. Error: {}", strerror(errno));
     return false;
   }
   logger.info("open video tunnel out successful");
