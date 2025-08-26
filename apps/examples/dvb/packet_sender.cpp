@@ -59,10 +59,10 @@ void PacketSender::send_loop()
         transceiver.send(frame_burst);
         frame_burst.clear();
       }
+      std::this_thread::sleep_for(std::chrono::nanoseconds(10));
     }
     if (!frame_burst.empty()) {
       transceiver.send(frame_burst);
     }
-    std::this_thread::sleep_for(std::chrono::nanoseconds(10));
   }
 }
