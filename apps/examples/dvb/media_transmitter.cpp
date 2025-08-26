@@ -115,12 +115,13 @@ void MediaTransmitter::calcaute_dummy_packet_crc()
   uint16_t length     = ntohs(header->length);
   std::cout << __FUNCTION__ << length << std::endl;
 
-  span<uint8_t> crc_payload(dummy_ethernet_frame->data() + eth_header + sizeof(SYNC_HEAD), length);
+  span<uint8_t> crc_payload(dummy_ethernet_frame->data() + eth_header + sizeof(SYNC_HEAD),
+                            span<uint8_t>::size_type(length + 2));
   for (int i = 0; i < UINT16_MAX; i++) {
     fill_dummy_packet_seq({dummy_ethernet_frame->data(), dummy_ethernet_frame->size()}, i);
     g_dummy_packets_crc[i] = get_crc(crc_payload, i, false);
     if (i % 10000 == 0) {
-      logger.info("Calculating dummy packet seq {}, crc {}", i, g_dummy_packets_crc[i]);
+      logger.info("Calculating dummy packet seq {}, crc 0x{:04X}", i, g_dummy_packets_crc[i]);
     }
   }
 }
@@ -205,7 +206,7 @@ void MediaTransmitter::fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq
 
 void MediaTransmitter::push_dummy_packet()
 {
-  static bool save_first_dummy_packet = false;
+  static bool save_first_dummy_packet = true;
   tx_dummy_packet_counter.increment();
   auto p = std::make_shared<std::vector<uint8_t>>(*dummy_ethernet_frame.get());
 
@@ -235,7 +236,8 @@ void MediaTransmitter::fill_crc(span<uint8_t> payload, bool dummy)
   auto     header     = (struct Header*)(payload.data() + eth_header);
   uint16_t length     = ntohs(header->length);
   uint16_t seq        = ntohs(header->sequence);
-  uint16_t crc        = ntohs(get_crc({payload.data() + eth_header + sizeof(SYNC_HEAD), length}, seq, dummy));
+  uint16_t crc        = ntohs(
+      get_crc({payload.data() + eth_header + sizeof(SYNC_HEAD), span<uint8_t>::size_type(length + 2)}, seq, dummy));
   memcpy(payload.data() + eth_header + sizeof(SYNC_HEAD) + sizeof(Header::length) + length, &crc, sizeof(crc));
 }
 
@@ -361,7 +363,9 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
   }
 
   uint16_t expected_crc =
-      htons(get_crc({payload.data() + sizeof(SYNC_HEAD), header.length}, header.sequence, header.media_length == 0));
+      htons(get_crc({payload.data() + sizeof(SYNC_HEAD), span<uint8_t>::size_type(header.length + 2)},
+                    header.sequence,
+                    header.media_length == 0));
   uint16_t received_crc = *(const uint16_t*)(payload.data() + payload.size() - 2);
   if (received_crc != expected_crc) {
     logger.error("Payload {}, crc 0x{:04X}, expected crc 0x{:04X}, indicating a possible corruption",
