@@ -91,8 +91,9 @@ static uint16_t get_crc(const span<const uint8_t>& payload, uint16_t seq, bool d
 
 static void fill_dummy_payload(uint8_t* payload, size_t size)
 {
+  uint8_t value = 0;
   for (size_t i = 0; i < size; ++i) {
-    payload[i] = 0x5a;
+    payload[i] = value++;
   }
 }
 
@@ -243,7 +244,7 @@ void MediaTransmitter::fill_crc(span<uint8_t> payload, bool dummy)
 
 void MediaTransmitter::generate_media()
 {
-  static bool save_first_video_packet = true;
+  // static bool save_first_video_packet = true;
   for (int i = 0; i < 10; i++) {
     push_dummy_packet();
   }
@@ -258,22 +259,22 @@ void MediaTransmitter::generate_media()
     eth_builder->build_frame({packet->data(), packet->size()});
 
     if (auto h = fill_media(packet, false); h) {
-      if (h->length < 38) {
-        h->length = 38;
-      }
-      packet->resize(ether_head_size + sizeof(SYNC_HEAD) + sizeof(Header::length) + h->length + sizeof(uint16_t),
-                     false);
-      h->sequence = sequence_id;
-      sequence_id = (sequence_id + 1) % UINT16_MAX;
-      fill_header(packet, *h);
-      fill_crc({packet->data(), packet->size()}, false);
-      if (save_first_video_packet) {
-        save_to_binary_file(packet->data(), packet->size(), "first_send_packet.bin");
-        save_first_video_packet = false;
-      }
-      push_packet_to_send_queue(packet);
-      tx_video_packet_counter.increment();
-      for (uint16_t i = 0; i < (speed_factor - 1); ++i) {
+      // if (h->length < 38) {
+      //   h->length = 38;
+      // }
+      // packet->resize(ether_head_size + sizeof(SYNC_HEAD) + sizeof(Header::length) + h->length + sizeof(uint16_t),
+      //                false);
+      // h->sequence = sequence_id;
+      // sequence_id = (sequence_id + 1) % UINT16_MAX;
+      // fill_header(packet, *h);
+      // fill_crc({packet->data(), packet->size()}, false);
+      // if (save_first_video_packet) {
+      //   save_to_binary_file(packet->data(), packet->size(), "first_send_packet.bin");
+      //   save_first_video_packet = false;
+      // }
+      // push_packet_to_send_queue(packet);
+      // tx_video_packet_counter.increment();
+      for (uint16_t i = 0; i < 1; ++i) {
         push_dummy_packet();
       }
     }
