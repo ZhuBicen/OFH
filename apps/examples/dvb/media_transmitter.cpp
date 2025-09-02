@@ -91,10 +91,13 @@ static uint16_t get_crc(const span<const uint8_t>& payload, uint16_t seq, bool d
 
 static void fill_dummy_payload(uint8_t* payload, size_t size, uint16_t content)
 {
+  if (content == 0) {
+    content = 0xFFFF;
+  }
   uint16_t* ptr = (uint16_t*)payload;
 
   for (size_t i = 0; i < (size / 2); ++i) {
-    *ptr = htons(content);
+    ptr[i] = htons(content);
   }
   if (size % 2 != 0) {
     payload[size - 1] = htons(content) & 0xFF;
@@ -211,18 +214,19 @@ void MediaTransmitter::fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq
 
 void MediaTransmitter::push_dummy_packet()
 {
-  static bool save_first_dummy_packet = true;
+  static uint16_t save_first_dummy_packet = 0;
   tx_dummy_packet_counter.increment();
-  create_dummy_ethernet_frame(sequence_id);
-  auto p = std::make_shared<std::vector<uint8_t>>(*dummy_ethernet_frame.get());
+  int seq = sequence_id;
 
-  fill_dummy_packet_seq({p->data(), p->size()}, sequence_id);
+  create_dummy_ethernet_frame(seq);
+  auto p = std::make_shared<std::vector<uint8_t>>(*dummy_ethernet_frame.get());
+  fill_dummy_packet_seq({p->data(), p->size()}, seq);
   sequence_id = (sequence_id + 1) % UINT16_MAX;
   fill_crc({p->data(), p->size()}, true);
 
-  if (save_first_dummy_packet) {
-    save_to_binary_file(p->data(), p->size(), "first_dummy_packet.bin");
-    save_first_dummy_packet = false;
+  if (save_first_dummy_packet < 10) {
+    save_to_binary_file(p->data(), p->size(), "dummy_packet_" + std::to_string(seq) + ".bin");
+    save_first_dummy_packet++;
   }
   push_packet_to_send_queue(p);
 }
