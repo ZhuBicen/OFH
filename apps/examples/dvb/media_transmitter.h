@@ -48,7 +48,7 @@ public:
   ~MediaTransmitter();
   void start();
 
-  std::optional<Header> fill_media(srsran::Packet packet, bool dummy);
+  std::optional<Header> fill_media(srsran::Packet packet, bool dummy, uint16_t seq);
   void                  fill_header(srsran::Packet packet, struct Header& header);
   PayloadCheckResult    forward_payload(span<const uint8_t> payload);
 
@@ -74,7 +74,7 @@ private:
   bool open_video_tunnel_out();
   void generate_media();
   void calcaute_dummy_packet_crc();
-  void create_dummy_ethernet_frame();
+  void create_dummy_ethernet_frame(uint16_t seq);
   void fill_crc(span<uint8_t> payload, bool dummy);
   void fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq);
 

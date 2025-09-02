@@ -89,22 +89,26 @@ static uint16_t get_crc(const span<const uint8_t>& payload, uint16_t seq, bool d
   return crc16_4bytes_optimized(payload.data(), payload.size(), 0);
 }
 
-static void fill_dummy_payload(uint8_t* payload, size_t size)
+static void fill_dummy_payload(uint8_t* payload, size_t size, uint16_t content)
 {
-  uint8_t value = 0;
-  for (size_t i = 0; i < size; ++i) {
-    payload[i] = value++;
+  uint16_t* ptr = (uint16_t*)payload;
+
+  for (size_t i = 0; i < (size / 2); ++i) {
+    *ptr = htons(content);
+  }
+  if (size % 2 != 0) {
+    payload[size - 1] = htons(content) & 0xFF;
   }
 }
 
-void MediaTransmitter::create_dummy_ethernet_frame()
+void MediaTransmitter::create_dummy_ethernet_frame(uint16_t seq)
 {
   dummy_ethernet_frame = std::make_shared<std::vector<uint8_t>>(ETHERNET_FRAME_SIZE);
   dummy_ethernet_frame->resize(ETHERNET_FRAME_SIZE, 0);
   size_t header_size = eth_builder->get_header_size().value();
   eth_builder->build_frame({dummy_ethernet_frame->data(), dummy_ethernet_frame->size()});
   span<uint8_t> payload(dummy_ethernet_frame->data() + header_size, dummy_ethernet_frame->size() - header_size);
-  auto          h = fill_media(dummy_ethernet_frame, true);
+  auto          h = fill_media(dummy_ethernet_frame, true, seq);
   // seq need to be adjusted
   fill_header(dummy_ethernet_frame, *h);
 }
@@ -165,7 +169,7 @@ void MediaTransmitter::set_eth_builder(srsran::ether::frame_builder* eth_builder
 {
   eth_builder     = eth_builder_;
   ether_head_size = eth_builder->get_header_size().value();
-  create_dummy_ethernet_frame();
+  create_dummy_ethernet_frame(0);
   logger.info("dummy packet created");
   calcaute_dummy_packet_crc();
   logger.info("dummy packet crc generated");
@@ -209,6 +213,7 @@ void MediaTransmitter::push_dummy_packet()
 {
   static bool save_first_dummy_packet = true;
   tx_dummy_packet_counter.increment();
+  create_dummy_ethernet_frame(sequence_id);
   auto p = std::make_shared<std::vector<uint8_t>>(*dummy_ethernet_frame.get());
 
   fill_dummy_packet_seq({p->data(), p->size()}, sequence_id);
@@ -258,7 +263,7 @@ void MediaTransmitter::generate_media()
     packet->resize(ETHERNET_FRAME_SIZE, 0);
     eth_builder->build_frame({packet->data(), packet->size()});
 
-    if (auto h = fill_media(packet, false); h) {
+    if (auto h = fill_media(packet, false, 0); h) {
       // if (h->length < 38) {
       //   h->length = 38;
       // }
@@ -281,17 +286,17 @@ void MediaTransmitter::generate_media()
   }
 }
 
-ssize_t fake_read(int fd, void* buf, size_t count)
+ssize_t fake_read(int fd, void* buf, size_t count, uint16_t seq)
 {
   // Simulate reading data from a file descriptor
-  fill_dummy_payload(static_cast<uint8_t*>(buf), count);
+  fill_dummy_payload(static_cast<uint8_t*>(buf), count, seq);
   return static_cast<ssize_t>(count);
 }
 
 /**
  * didn't fill crc
  */
-std::optional<Header> MediaTransmitter::fill_media(srsran::Packet packet, bool dummy)
+std::optional<Header> MediaTransmitter::fill_media(srsran::Packet packet, bool dummy, uint16_t seq)
 {
   if (video_tunnel_in == -1) {
     return std::nullopt;
@@ -301,9 +306,12 @@ std::optional<Header> MediaTransmitter::fill_media(srsran::Packet packet, bool d
   // media payload include media media data, not including media length
   span<uint8_t> media_payload(packet->data() + ether_head_size + sizeof(Header),
                               packet->size() - ether_head_size - sizeof(Header) - CRC_LENGTH);
-  auto          reader = dummy ? fake_read : read;
-
-  ssize_t bytes_read = reader(video_tunnel_in, media_payload.data(), media_payload.size());
+  ssize_t       bytes_read;
+  if (dummy) {
+    bytes_read = fake_read(video_tunnel_in, media_payload.data(), media_payload.size(), seq);
+  } else {
+    bytes_read = read(video_tunnel_in, media_payload.data(), media_payload.size());
+  }
   if (bytes_read == 0) {
     // logger.info("No data read from video tunnel in, possibly EOF or no data available.");
     open_video_tunnel_in();
