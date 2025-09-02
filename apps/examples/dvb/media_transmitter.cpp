@@ -222,7 +222,7 @@ void MediaTransmitter::push_dummy_packet()
   auto p = std::make_shared<std::vector<uint8_t>>(*dummy_ethernet_frame.get());
   fill_dummy_packet_seq({p->data(), p->size()}, seq);
   sequence_id = (sequence_id + 1) % UINT16_MAX;
-  fill_crc({p->data(), p->size()}, true);
+  fill_crc({p->data(), p->size()}, false);
 
   if (save_first_dummy_packet < 10) {
     save_to_binary_file(p->data(), p->size(), "dummy_packet_" + std::to_string(seq) + ".bin");
@@ -375,10 +375,8 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
     return PayloadCheckResult::INVALID_LENGTH;
   }
 
-  uint16_t expected_crc =
-      htons(get_crc({payload.data() + sizeof(SYNC_HEAD), span<uint8_t>::size_type(header.length + 2)},
-                    header.sequence,
-                    header.media_length == 0));
+  uint16_t expected_crc = htons(get_crc(
+      {payload.data() + sizeof(SYNC_HEAD), span<uint8_t>::size_type(header.length + 2)}, header.sequence, false));
   uint16_t received_crc = *(const uint16_t*)(payload.data() + payload.size() - 2);
   if (received_crc != expected_crc) {
     logger.error("Payload {}, crc 0x{:04X}, expected crc 0x{:04X}, indicating a possible corruption",
