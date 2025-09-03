@@ -76,6 +76,12 @@ static void configure_cli11_dvb_tx_sim_args(CLI::App& app, dvb_tx_sim_ofh_appcon
   app.add_option("--speed_factor", config.speed_factor, "Speed factor for the media transmitter")
       ->capture_default_str()
       ->check(CLI::Range(1, 10000));
+  app.add_option("--initial_num_of_packet", config.initial_num_of_packet, "packet num to be sent before ffmpeg started")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 100000));
+  app.add_option("--packet_delay_in_nano_seconds", config.packet_delay_in_nano_seconds, "packet delay in nanosec")
+      ->capture_default_str()
+      ->check(CLI::Range(1, 1000000000));
 }
 
 void srsran::configure_cli11_with_dvb_tx_sim_appconfig_schema(CLI::App&             app,

@@ -53,7 +53,9 @@ struct dvb_tx_sim_ofh_appconfig {
   /// input stream file
   std::string input_file;
   std::string output_file;
-  unsigned    speed_factor = 1;
+  unsigned    speed_factor                 = 1;
+  unsigned    initial_num_of_packet        = 220;
+  unsigned    packet_delay_in_nano_seconds = 0;
 };
 
 /// RU emulator logging parameters.

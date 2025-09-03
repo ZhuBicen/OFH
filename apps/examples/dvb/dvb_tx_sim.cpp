@@ -118,8 +118,9 @@ struct dvb_tx_sim_config {
 
   unsigned mtu;
 
-  unsigned speed_factor;
-
+  unsigned    speed_factor;
+  unsigned    initial_num_of_packet;
+  unsigned    packet_delay_in_nano_seconds;
   std::string input_file;
   std::string output_file;
 };
@@ -185,9 +186,10 @@ public:
                       packet_queue,
                       prepare_executor_,
                       cfg_.speed_factor,
+                      cfg_.initial_num_of_packet,
                       corrupt_counter,
                       dropped_counter),
-    packet_sender(logger_, tx_executor, transceiver_, packet_queue, tx_bytes)
+    packet_sender(logger_, tx_executor, transceiver_, packet_queue, tx_bytes, cfg_.packet_delay_in_nano_seconds)
   {
     seq_counters.insert(0, 0);
     ether::vlan_frame_params ether_params;
@@ -208,17 +210,18 @@ public:
   // See interface for documentation.
   void on_new_frame(unique_rx_buffer buffer) override
   {
-    static bool save_first_frame = true;
+    static unsigned save_received_frame = 0;
     rx_total_counter.increment();
     if (!save_executor.defer([this, b = std::move(buffer)] {
           size_t              ether_header_size = eth_builder->get_header_size().value();
           span<const uint8_t> frame = b.data().subspan(ether_header_size, b.data().size() - ether_header_size);
           // logger.info("Received new frame of size {}, payload {}", b.data().size(), frame.size());
-          if (save_first_frame) {
-            save_first_frame = false;
-            logger.info("Saving first received frame to 'received_frame.bin'");
-            save_to_binary_file(b.data().data(), b.data().size(), "received_frame.bin");
-            logger.info("Saved first received frame to 'received_frame.bin'");
+          if (save_received_frame < 2) {
+            logger.info("Saving received frame to 'received_frame.bin'");
+            save_to_binary_file(
+                b.data().data(), b.data().size(), "received_frame_" + std::to_string(save_received_frame) + ".bin");
+            logger.info("Saved received frame to 'received_frame.bin'");
+            save_received_frame++;
 
             media_transmitter.forward_payload(frame);
             video_rx_total_counter.increment();
@@ -467,12 +470,14 @@ int main(int argc, char** argv)
 
   dvb_tx_sim_config emu_cfg;
 
-  emu_cfg.nof_prb      = MAX_DVB_FRAME_SIZE / 4;
-  emu_cfg.input_file   = dvb_tx_sim_cfg.input_file;
-  emu_cfg.output_file  = dvb_tx_sim_cfg.output_file;
-  emu_cfg.speed_factor = dvb_tx_sim_cfg.speed_factor;
-  emu_cfg.vlan_tag     = dvb_tx_sim_cfg.vlan_tag;
-  emu_cfg.mtu          = dvb_tx_sim_cfg.mtu;
+  emu_cfg.nof_prb                      = MAX_DVB_FRAME_SIZE / 4;
+  emu_cfg.input_file                   = dvb_tx_sim_cfg.input_file;
+  emu_cfg.output_file                  = dvb_tx_sim_cfg.output_file;
+  emu_cfg.speed_factor                 = dvb_tx_sim_cfg.speed_factor;
+  emu_cfg.initial_num_of_packet        = dvb_tx_sim_cfg.initial_num_of_packet;
+  emu_cfg.packet_delay_in_nano_seconds = dvb_tx_sim_cfg.packet_delay_in_nano_seconds;
+  emu_cfg.vlan_tag                     = dvb_tx_sim_cfg.vlan_tag;
+  emu_cfg.mtu                          = dvb_tx_sim_cfg.mtu;
   if (!parse_mac_address(dvb_tx_sim_cfg.src_mac_address, emu_cfg.src_mac)) {
     report_error("Invalid MAC address provided: '{}'", dvb_tx_sim_cfg.src_mac_address);
   }
@@ -481,6 +486,11 @@ int main(int argc, char** argv)
   }
   logger.info("input video tunnel {}", dvb_tx_sim_cfg.input_file);
   logger.info("output video tunnel {}", dvb_tx_sim_cfg.output_file);
+  logger.info("------------------------------------------");
+  logger.info("initial_num_of_packet {}", emu_cfg.initial_num_of_packet);
+  logger.info("packet_delay_in_nano_seconds {}", emu_cfg.packet_delay_in_nano_seconds);
+  logger.info("------------------------------------------");
+
   // Create timing worker.
 
   dvb_tx_sims.push_back(std::make_unique<dvb_tx_sim>(logger,

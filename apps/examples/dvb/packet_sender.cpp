@@ -16,14 +16,20 @@ PacketSender::PacketSender(srslog::basic_logger&   logger_,
                            task_executor&          executor_,
                            dvb_tx_sim_transceiver& transceiver_,
                            PacketQueue&            queue_,
-                           kpi_counter&            tx_bytes_) :
-  logger(logger_), executor(executor_), packets(queue_), transceiver(transceiver_), tx_bytes(tx_bytes_)
+                           kpi_counter&            tx_bytes_,
+                           uint16_t                packet_delay_in_nano_seconds_) :
+  logger(logger_),
+  executor(executor_),
+  packets(queue_),
+  transceiver(transceiver_),
+  tx_bytes(tx_bytes_),
+  packet_delay_in_nano_seconds(packet_delay_in_nano_seconds_)
 {
 }
 
 void PacketSender::start()
 {
-  logger.info("Starting packet sender ...");
+  logger.info("Starting packet sender ... packet delay in nano seconds: {}", packet_delay_in_nano_seconds);
 
   std::promise<void> p;
   std::future<void>  fut = p.get_future();
@@ -43,8 +49,8 @@ void PacketSender::send_loop()
 {
   static bool save_first_send_frame = true;
   while (true) {
-    static_vector<span<const uint8_t>, MAX_BURST_SIZE> frame_burst;
-    std::vector<Packet>                                cache_packets;
+    static_vector<span<const uint8_t>, 1> frame_burst;
+    std::vector<Packet>                   cache_packets;
     for (size_t i = 0; i < packets.size(); i++) {
       Packet packet;
       packets.try_pop(packet);
@@ -55,11 +61,11 @@ void PacketSender::send_loop()
         save_first_send_frame = false;
       }
       frame_burst.emplace_back(packet->data(), packet->size());
-      if (frame_burst.size() >= MAX_BURST_SIZE) {
+      if (frame_burst.size() >= 1) {
         transceiver.send(frame_burst);
         frame_burst.clear();
       }
-      std::this_thread::sleep_for(std::chrono::nanoseconds(10));
+      std::this_thread::sleep_for(std::chrono::nanoseconds(packet_delay_in_nano_seconds));
     }
     if (!frame_burst.empty()) {
       transceiver.send(frame_burst);

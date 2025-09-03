@@ -17,6 +17,7 @@ class PacketSender
   PacketQueue&            packets;
   dvb_tx_sim_transceiver& transceiver;
   kpi_counter&            tx_bytes;
+  uint16_t                packet_delay_in_nano_seconds;
 
   void send_loop();
 
@@ -25,7 +26,8 @@ public:
                task_executor&          executor_,
                dvb_tx_sim_transceiver& transceiver_,
                PacketQueue&            queue_,
-               kpi_counter&            tx_bytes_);
+               kpi_counter&            tx_bytes_,
+               uint16_t                packet_delay_in_nano_seconds_);
   void start();
 };
 } // namespace srsran

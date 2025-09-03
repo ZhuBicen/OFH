@@ -140,6 +140,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
                                    srsran::PacketQueue&   packet_queue_,
                                    srsran::task_executor& executor_,
                                    uint16_t               speed_factor_,
+                                   uint16_t               initial_num_of_packet_,
                                    kpi_counter&           tx_video_packet_counter_,
                                    kpi_counter&           tx_dummy_packet_counter_) :
   packet_receiver(logger_),
@@ -151,6 +152,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   video_tunnel_out(-1),
   logger(logger_),
   speed_factor(speed_factor_),
+  initial_num_of_packet(initial_num_of_packet_),
   tx_video_packet_counter(tx_video_packet_counter_),
   tx_dummy_packet_counter(tx_dummy_packet_counter_)
 {
@@ -162,10 +164,11 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
     logger.info("Failed to open video out tunnels, please start fifo_to_tcp program");
     std::this_thread::sleep_for(std::chrono::seconds(5));
   }
-  logger.info("MediaTransmitter initialized with input: {}, output: {}, speed factor: {}",
+  logger.info("MediaTransmitter initialized with input: {}, output: {}, speed factor: {}, initial packets: {}",
               input_stream_file_name,
               output_stream_file_name,
-              speed_factor);
+              speed_factor,
+              initial_num_of_packet);
 }
 
 void MediaTransmitter::set_eth_builder(srsran::ether::frame_builder* eth_builder_)
@@ -214,7 +217,7 @@ void MediaTransmitter::fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq
 
 void MediaTransmitter::push_dummy_packet()
 {
-  static uint16_t save_first_dummy_packet = 0;
+  // static uint16_t save_first_dummy_packet = false;
   tx_dummy_packet_counter.increment();
   int seq = sequence_id;
 
@@ -224,10 +227,10 @@ void MediaTransmitter::push_dummy_packet()
   sequence_id = (sequence_id + 1) % UINT16_MAX;
   fill_crc({p->data(), p->size()}, false);
 
-  if (save_first_dummy_packet < 220) {
-    save_to_binary_file(p->data(), p->size(), "dummy_packet_" + std::to_string(seq) + ".bin");
-    save_first_dummy_packet++;
-  }
+  // if (save_first_dummy_packet < 220) {
+  //   save_to_binary_file(p->data(), p->size(), "dummy_packet_" + std::to_string(seq) + ".bin");
+  //   save_first_dummy_packet++;
+  // }
   push_packet_to_send_queue(p);
 }
 
@@ -254,7 +257,7 @@ void MediaTransmitter::fill_crc(span<uint8_t> payload, bool dummy)
 void MediaTransmitter::generate_media()
 {
   // static bool save_first_video_packet = true;
-  for (int i = 0; i < 220; i++) {
+  for (int i = 0; i < initial_num_of_packet; i++) {
     push_dummy_packet();
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
