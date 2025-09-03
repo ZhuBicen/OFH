@@ -47,7 +47,7 @@ bool save_to_binary_file(const void* data_address, std::size_t data_length, cons
 
 void PacketSender::send_loop()
 {
-  static bool save_first_send_frame = true;
+  static bool save_first_send_frame = false;
   while (true) {
     static_vector<span<const uint8_t>, 1> frame_burst;
     std::vector<Packet>                   cache_packets;
