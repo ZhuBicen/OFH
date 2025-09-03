@@ -224,7 +224,7 @@ void MediaTransmitter::push_dummy_packet()
   sequence_id = (sequence_id + 1) % UINT16_MAX;
   fill_crc({p->data(), p->size()}, false);
 
-  if (save_first_dummy_packet < 10) {
+  if (save_first_dummy_packet < 220) {
     save_to_binary_file(p->data(), p->size(), "dummy_packet_" + std::to_string(seq) + ".bin");
     save_first_dummy_packet++;
   }
@@ -254,8 +254,9 @@ void MediaTransmitter::fill_crc(span<uint8_t> payload, bool dummy)
 void MediaTransmitter::generate_media()
 {
   // static bool save_first_video_packet = true;
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 220; i++) {
     push_dummy_packet();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   while (true) {
     if (video_tunnel_in == -1) {
