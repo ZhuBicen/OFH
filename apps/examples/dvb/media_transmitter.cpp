@@ -13,8 +13,6 @@
 #include <thread>
 #include <unistd.h>
 
-static constexpr unsigned ETHERNET_FRAME_SIZE = 2048;
-
 static bool change_fifo_buffer_size(int fd)
 {
   long current_size;
@@ -106,8 +104,8 @@ static void fill_dummy_payload(uint8_t* payload, size_t size, uint16_t content)
 
 void MediaTransmitter::create_dummy_ethernet_frame(uint16_t seq)
 {
-  dummy_ethernet_frame = std::make_shared<std::vector<uint8_t>>(ETHERNET_FRAME_SIZE);
-  dummy_ethernet_frame->resize(ETHERNET_FRAME_SIZE, 0);
+  dummy_ethernet_frame = std::make_shared<std::vector<uint8_t>>(mtu_size);
+  dummy_ethernet_frame->resize(mtu_size, 0);
   size_t header_size = eth_builder->get_header_size().value();
   eth_builder->build_frame({dummy_ethernet_frame->data(), dummy_ethernet_frame->size()});
   span<uint8_t> payload(dummy_ethernet_frame->data() + header_size, dummy_ethernet_frame->size() - header_size);
@@ -141,6 +139,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
                                    srsran::task_executor& executor_,
                                    uint16_t               speed_factor_,
                                    uint16_t               initial_num_of_packet_,
+                                   uint16_t               mtu_size_,
                                    kpi_counter&           tx_video_packet_counter_,
                                    kpi_counter&           tx_dummy_packet_counter_) :
   packet_receiver(logger_),
@@ -153,6 +152,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   logger(logger_),
   speed_factor(speed_factor_),
   initial_num_of_packet(initial_num_of_packet_),
+  mtu_size(mtu_size_),
   tx_video_packet_counter(tx_video_packet_counter_),
   tx_dummy_packet_counter(tx_dummy_packet_counter_)
 {
@@ -164,11 +164,13 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
     logger.info("Failed to open video out tunnels, please start fifo_to_tcp program");
     std::this_thread::sleep_for(std::chrono::seconds(5));
   }
-  logger.info("MediaTransmitter initialized with input: {}, output: {}, speed factor: {}, initial packets: {}",
-              input_stream_file_name,
-              output_stream_file_name,
-              speed_factor,
-              initial_num_of_packet);
+  logger.info(
+      "MediaTransmitter initialized with input: {}, output: {}, speed factor: {}, initial packets: {}, mtu_size: {}",
+      input_stream_file_name,
+      output_stream_file_name,
+      speed_factor,
+      initial_num_of_packet,
+      mtu_size);
 }
 
 void MediaTransmitter::set_eth_builder(srsran::ether::frame_builder* eth_builder_)
@@ -267,8 +269,8 @@ void MediaTransmitter::generate_media()
       open_video_tunnel_in();
       continue;
     }
-    srsran::Packet packet = std::make_shared<std::vector<uint8_t>>(ETHERNET_FRAME_SIZE);
-    packet->resize(ETHERNET_FRAME_SIZE, 0);
+    srsran::Packet packet = std::make_shared<std::vector<uint8_t>>(mtu_size);
+    packet->resize(mtu_size, 0);
     eth_builder->build_frame({packet->data(), packet->size()});
 
     if (auto h = fill_media(packet, false, 0); h) {

@@ -69,7 +69,7 @@ static void configure_cli11_dvb_tx_sim_args(CLI::App& app, dvb_tx_sim_ofh_appcon
   app.add_option("--src_mac_addr", config.src_mac_address, "Dvb tx Src MAC address")->capture_default_str();
   app.add_option("--dst_mac_addr", config.dst_mac_address, "Dvb tx Dst MAC address")->capture_default_str();
   app.add_option("--vlan_tag", config.vlan_tag, "V-LAN identifier")->capture_default_str()->check(CLI::Range(0, 4094));
-  app.add_option("--mtu", config.mtu, "V-LAN identifier")->capture_default_str()->check(CLI::Range(2048, 9600));
+  app.add_option("--mtu", config.mtu, "V-LAN identifier")->capture_default_str()->check(CLI::Range(64, 9600));
   app.add_option("--enable_promiscuous", config.enable_promiscuous, "Promiscuous mode flag")->capture_default_str();
   app.add_option("--input_file", config.input_file, "input stream file")->capture_default_str();
   app.add_option("--output_file", config.output_file, "output stream file")->capture_default_str();

@@ -67,9 +67,6 @@ using namespace srsran;
 using namespace ofh;
 using namespace ether;
 
-/// Ethernet packet size.
-static constexpr unsigned ETHERNET_FRAME_SIZE = 2048;
-
 /// Maximum number of symbols in a slot, considering normal cyclic prefix.
 static constexpr size_t MAX_NOF_SYMBOLS = 16;
 
@@ -187,6 +184,7 @@ public:
                       prepare_executor_,
                       cfg_.speed_factor,
                       cfg_.initial_num_of_packet,
+                      cfg_.mtu,
                       corrupt_counter,
                       dropped_counter),
     packet_sender(logger_, tx_executor, transceiver_, packet_queue, tx_bytes, cfg_.packet_delay_in_nano_seconds)
