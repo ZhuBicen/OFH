@@ -138,7 +138,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
                                    srsran::PacketQueue&   packet_queue_,
                                    srsran::task_executor& executor_,
                                    uint16_t               speed_factor_,
-                                   uint16_t               initial_num_of_packet_,
+                                   unsigned               initial_num_of_packet_,
                                    uint16_t               mtu_size_,
                                    kpi_counter&           tx_video_packet_counter_,
                                    kpi_counter&           tx_dummy_packet_counter_) :
@@ -259,9 +259,8 @@ void MediaTransmitter::fill_crc(span<uint8_t> payload, bool dummy)
 void MediaTransmitter::generate_media()
 {
   // static bool save_first_video_packet = true;
-  for (int i = 0; i < initial_num_of_packet; i++) {
+  for (unsigned i = 0; i < initial_num_of_packet; i++) {
     push_dummy_packet();
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   while (true) {
     if (video_tunnel_in == -1) {

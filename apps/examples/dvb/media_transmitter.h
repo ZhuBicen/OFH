@@ -42,7 +42,7 @@ public:
                    srsran::PacketQueue&   packet_queue_,
                    srsran::task_executor& executor,
                    uint16_t               speed_factor,
-                   uint16_t               initial_num_of_packet,
+                   unsigned               initial_num_of_packet,
                    uint16_t               mtu_size,
                    kpi_counter&           tx_video_packet_counter_,
                    kpi_counter&           tx_dummy_packet_counter_);
@@ -69,7 +69,7 @@ private:
   std::optional<uint16_t> last_received_sequence_id;
 
   uint16_t     speed_factor;
-  uint16_t     initial_num_of_packet;
+  unsigned     initial_num_of_packet;
   uint16_t     mtu_size;
   kpi_counter& tx_video_packet_counter;
   kpi_counter& tx_dummy_packet_counter;
