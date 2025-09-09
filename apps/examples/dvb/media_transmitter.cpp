@@ -385,10 +385,11 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
       {payload.data() + sizeof(SYNC_HEAD), span<uint8_t>::size_type(header.length + 2)}, header.sequence, false));
   uint16_t received_crc = *(const uint16_t*)(payload.data() + payload.size() - 2);
   if (received_crc != expected_crc) {
-    logger.error("Payload {}, crc 0x{:04X}, expected crc 0x{:04X}, indicating a possible corruption",
+    logger.error("Sequence {}, crc 0x{:04X}, expected crc 0x{:04X}, indicating a possible corruption",
                  seq_id,
                  received_crc,
                  expected_crc);
+    save_to_binary_file(payload.data(), payload.size(), "invalid_crc_seq_" + std::to_string(seq_id) + ".bin");
     return PayloadCheckResult::INVALID_CRC;
   }
 

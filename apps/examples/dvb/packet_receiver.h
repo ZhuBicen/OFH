@@ -30,7 +30,7 @@ private:
   std::priority_queue<RxPacket>              packet_queue;
   uint16_t                                   expected_seq;
   static constexpr int                       MAX_GAP = 32;
-  static constexpr std::chrono::milliseconds TIMEOUT{200};
+  static constexpr std::chrono::milliseconds TIMEOUT{2000};
   std::chrono::steady_clock::time_point      last_packet_time;
   bool                                       is_seq_greater(uint16_t seq1, uint16_t seq2) const;
 

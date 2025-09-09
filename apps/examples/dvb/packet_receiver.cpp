@@ -51,7 +51,7 @@ std::vector<RxPacket> PacketReceiver::get_sorted_packets()
       expected_seq = (expected_seq + 1) % UINT16_MAX;
     } else if (timeout || packet_queue.size() >= MAX_GAP) {
       logger.error(
-          "Detected packet loss: seq= {}, top={}, buffered={}", expected_seq, top.sequence_number, packet_queue.size());
+          "Detected packet loss: seq [{}, {}), buffered={}", expected_seq, top.sequence_number, packet_queue.size());
       expected_seq = top.sequence_number;
       sorted_packets.push_back(std::move(top));
       packet_queue.pop();
