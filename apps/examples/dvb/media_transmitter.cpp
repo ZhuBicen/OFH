@@ -259,7 +259,7 @@ void MediaTransmitter::fill_crc(span<uint8_t> payload, bool dummy)
 void MediaTransmitter::generate_media()
 {
   // static bool save_first_video_packet = true;
-  for (unsigned i = 0; i < initial_num_of_packet; i++) {
+  for (unsigned i = 0; i < initial_num_of_packet || initial_num_of_packet == 0; i++) {
     push_dummy_packet();
   }
   while (true) {
