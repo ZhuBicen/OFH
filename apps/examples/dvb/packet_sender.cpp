@@ -64,11 +64,12 @@ void PacketSender::send_loop()
       if (frame_burst.size() >= 1) {
         transceiver.send(frame_burst);
         frame_burst.clear();
+        std::this_thread::sleep_for(std::chrono::nanoseconds(packet_delay_in_nano_seconds));
       }
-      std::this_thread::sleep_for(std::chrono::nanoseconds(packet_delay_in_nano_seconds));
     }
     if (!frame_burst.empty()) {
       transceiver.send(frame_burst);
+      std::this_thread::sleep_for(std::chrono::nanoseconds(packet_delay_in_nano_seconds));
     }
   }
 }

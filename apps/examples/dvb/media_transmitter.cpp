@@ -116,15 +116,14 @@ void MediaTransmitter::create_dummy_ethernet_frame(uint16_t seq)
 
 void MediaTransmitter::calcaute_dummy_packet_crc()
 {
-  size_t   eth_header = eth_builder->get_header_size().value();
-  auto     header     = (struct Header*)(dummy_ethernet_frame->data() + eth_header);
-  uint16_t length     = ntohs(header->length);
-  std::cout << __FUNCTION__ << length << std::endl;
-
-  span<uint8_t> crc_payload(dummy_ethernet_frame->data() + eth_header + sizeof(SYNC_HEAD),
-                            span<uint8_t>::size_type(length + 2));
   for (int i = 0; i < UINT16_MAX; i++) {
+    create_dummy_ethernet_frame(i);
     fill_dummy_packet_seq({dummy_ethernet_frame->data(), dummy_ethernet_frame->size()}, i);
+    size_t        eth_header = eth_builder->get_header_size().value();
+    auto          header     = (struct Header*)(dummy_ethernet_frame->data() + eth_header);
+    uint16_t      length     = ntohs(header->length);
+    span<uint8_t> crc_payload(dummy_ethernet_frame->data() + eth_header + sizeof(SYNC_HEAD),
+                              span<uint8_t>::size_type(length + 2));
     g_dummy_packets_crc[i] = get_crc(crc_payload, i, false);
     if (i % 10000 == 0) {
       logger.info("Calculating dummy packet seq {}, crc 0x{:04X}", i, g_dummy_packets_crc[i]);
@@ -160,9 +159,8 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   if (!open_video_tunnel_in()) {
     logger.error("Failed to open video in tunnels");
   }
-  while (!open_video_tunnel_out()) {
+  if (!open_video_tunnel_out()) {
     logger.info("Failed to open video out tunnels, please start fifo_to_tcp program");
-    std::this_thread::sleep_for(std::chrono::seconds(5));
   }
   logger.info(
       "MediaTransmitter initialized with input: {}, output: {}, speed factor: {}, initial packets: {}, mtu_size: {}",
@@ -227,7 +225,7 @@ void MediaTransmitter::push_dummy_packet()
   auto p = std::make_shared<std::vector<uint8_t>>(*dummy_ethernet_frame.get());
   fill_dummy_packet_seq({p->data(), p->size()}, seq);
   sequence_id = (sequence_id + 1) % UINT16_MAX;
-  fill_crc({p->data(), p->size()}, false);
+  fill_crc({p->data(), p->size()}, true);
 
   // if (save_first_dummy_packet < 220) {
   //   save_to_binary_file(p->data(), p->size(), "dummy_packet_" + std::to_string(seq) + ".bin");
