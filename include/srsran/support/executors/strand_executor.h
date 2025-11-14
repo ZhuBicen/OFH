@@ -278,11 +278,11 @@ public:
   {
   }
 
-  [[nodiscard]] bool execute(unique_task task) override
+  bool execute(unique_task task) override
   {
     return detail::invoke_execute(strand, prio, std::move(task));
   }
-  [[nodiscard]] bool defer(unique_task task) override { return detail::invoke_defer(strand, prio, std::move(task)); }
+  bool defer(unique_task task) override { return detail::invoke_defer(strand, prio, std::move(task)); }
 
 private:
   enqueue_priority prio;
@@ -310,7 +310,7 @@ public:
   }
 
   /// \brief Dispatch task with priority \c prio. If possible, the task can be run inline.
-  [[nodiscard]] bool execute(enqueue_priority prio, unique_task task)
+  bool execute(enqueue_priority prio, unique_task task)
   {
     // Enqueue task in task_strand queue.
     if (not impl.queue.try_push(prio, std::move(task))) {
@@ -320,7 +320,7 @@ public:
   }
 
   /// \brief Dispatch task with priority \c prio. The task is never run inline.
-  [[nodiscard]] bool defer(enqueue_priority prio, unique_task task)
+  bool defer(enqueue_priority prio, unique_task task)
   {
     // Enqueue task in task_strand queue.
     if (not impl.queue.try_push(prio, std::move(task))) {
