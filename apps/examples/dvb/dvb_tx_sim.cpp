@@ -220,14 +220,15 @@ public:
                 b.data().data(), b.data().size(), "received_frame_" + std::to_string(save_received_frame) + ".bin");
             logger.info("Saved received frame to 'received_frame.bin'");
             save_received_frame++;
-
-            media_transmitter.forward_payload(frame);
-            video_rx_total_counter.increment();
-            return;
           }
           auto result = media_transmitter.forward_payload(frame);
           if (result == PayloadCheckResult::OK) {
             video_rx_total_counter.increment();
+          } else if (result == PayloadCheckResult::INVALID_SYNC_HEADER) {
+            static int invalid_sync_header_num = 0;
+            save_to_binary_file(frame.data(),
+                                frame.size(),
+                                "frame_invalid_sync_header_" + std::to_string(invalid_sync_header_num++) + ".bin");
           }
         })) {
       logger.warning("Failed to dispatch save task");

@@ -41,5 +41,6 @@ public:
   std::vector<RxPacket> get_sorted_packets();
   bool                  has_pending_packets() const;
   srslog::basic_logger& logger;
+  uint16_t              get_expected_seq() { return expected_seq; }
 };
 } // namespace srsran

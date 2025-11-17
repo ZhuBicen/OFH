@@ -367,7 +367,7 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
   header.media_length            = ntohs(original_header->media_length);
   uint16_t seq_id                = header.sequence;
   if (header.sync_header != SYNC_HEAD) {
-    logger.error("Invalid sync header in payload");
+    logger.error("Invalid sync header in payload {}", packet_receiver.get_expected_seq());
     return PayloadCheckResult::INVALID_SYNC_HEADER;
   }
   if (header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t) != payload.size()) {
