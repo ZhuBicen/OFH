@@ -82,6 +82,8 @@ static void configure_cli11_dvb_tx_sim_args(CLI::App& app, dvb_tx_sim_ofh_appcon
   app.add_option("--packet_delay_in_nano_seconds", config.packet_delay_in_nano_seconds, "packet delay in nanosec")
       ->capture_default_str()
       ->check(CLI::Range(1, 1000000000));
+  app.add_option("--variable_mtu", config.variable_mtu, "mtu size up and down between 64 and 2048")
+      ->capture_default_str();
 }
 
 void srsran::configure_cli11_with_dvb_tx_sim_appconfig_schema(CLI::App&             app,

@@ -9,14 +9,15 @@ dvb_tx_sim:
       dst_mac_addr: 8c:1f:64:a5:df:05          # MAC address of the DU
       enable_promiscuous: true               # Promiscuous mode flag
 #      vlan_tag: 33                            # VLAN tag
-      mtu: 1024
+      mtu: 2048
+      variable_mtu: true
       gps_alpha: 0
       gps_beta: 0
       frame_period: 8541666
       input_file: /tmp/input_stream2
       output_file: /tmp/output_stream2
       speed_factor: 200                       # Speed factor for simulation
-      initial_num_of_packet: 220             # Initial number of packets to send
-      packet_delay_in_nano_seconds: 10000     # Delay between packets in nanoseconds
+      initial_num_of_packet: 0             # Initial number of packets to send
+      packet_delay_in_nano_seconds: 1000    # Delay between packets in nanoseconds
 # dpdk:
 #   eal_args: "--lcores (0-1)@(0-15)"

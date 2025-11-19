@@ -118,6 +118,7 @@ struct dvb_tx_sim_config {
   unsigned    speed_factor;
   unsigned    initial_num_of_packet;
   unsigned    packet_delay_in_nano_seconds;
+  bool        variable_mtu;
   std::string input_file;
   std::string output_file;
 };
@@ -185,6 +186,7 @@ public:
                       cfg_.speed_factor,
                       cfg_.initial_num_of_packet,
                       cfg_.mtu,
+                      cfg_.variable_mtu,
                       corrupt_counter,
                       dropped_counter),
     packet_sender(logger_, tx_executor, transceiver_, packet_queue, tx_bytes, cfg_.packet_delay_in_nano_seconds)
@@ -477,6 +479,7 @@ int main(int argc, char** argv)
   emu_cfg.packet_delay_in_nano_seconds = dvb_tx_sim_cfg.packet_delay_in_nano_seconds;
   emu_cfg.vlan_tag                     = dvb_tx_sim_cfg.vlan_tag;
   emu_cfg.mtu                          = dvb_tx_sim_cfg.mtu;
+  emu_cfg.variable_mtu                 = dvb_tx_sim_cfg.variable_mtu;
   if (!parse_mac_address(dvb_tx_sim_cfg.src_mac_address, emu_cfg.src_mac)) {
     report_error("Invalid MAC address provided: '{}'", dvb_tx_sim_cfg.src_mac_address);
   }
@@ -486,6 +489,7 @@ int main(int argc, char** argv)
   logger.info("input video tunnel {}", dvb_tx_sim_cfg.input_file);
   logger.info("output video tunnel {}", dvb_tx_sim_cfg.output_file);
   logger.info("------------------------------------------");
+  logger.info("variable mtu? {}", emu_cfg.variable_mtu);
   logger.info("initial_num_of_packet {}", emu_cfg.initial_num_of_packet);
   logger.info("packet_delay_in_nano_seconds {}", emu_cfg.packet_delay_in_nano_seconds);
   logger.info("------------------------------------------");

@@ -102,10 +102,20 @@ static void fill_dummy_payload(uint8_t* payload, size_t size, uint16_t content)
   }
 }
 
+unsigned int map_sequence_to_size(unsigned int n, size_t mtu, bool variable_mtu)
+{
+  if (!variable_mtu) {
+    return mtu;
+  }
+  return 64 + (n % (mtu - 64 + 1));
+}
+
 void MediaTransmitter::create_dummy_ethernet_frame(uint16_t seq)
 {
-  dummy_ethernet_frame = std::make_shared<std::vector<uint8_t>>(mtu_size);
-  dummy_ethernet_frame->resize(mtu_size, 0);
+  auto size = map_sequence_to_size(seq, mtu_size, variable_mtu);
+
+  dummy_ethernet_frame = std::make_shared<std::vector<uint8_t>>(size);
+  dummy_ethernet_frame->resize(size, 0);
   size_t header_size = eth_builder->get_header_size().value();
   eth_builder->build_frame({dummy_ethernet_frame->data(), dummy_ethernet_frame->size()});
   span<uint8_t> payload(dummy_ethernet_frame->data() + header_size, dummy_ethernet_frame->size() - header_size);
@@ -139,6 +149,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
                                    uint16_t               speed_factor_,
                                    unsigned               initial_num_of_packet_,
                                    uint16_t               mtu_size_,
+                                   bool                   variable_mtu_,
                                    kpi_counter&           tx_video_packet_counter_,
                                    kpi_counter&           tx_dummy_packet_counter_) :
   packet_receiver(logger_),
@@ -152,6 +163,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   speed_factor(speed_factor_),
   initial_num_of_packet(initial_num_of_packet_),
   mtu_size(mtu_size_),
+  variable_mtu(variable_mtu_),
   tx_video_packet_counter(tx_video_packet_counter_),
   tx_dummy_packet_counter(tx_dummy_packet_counter_)
 {
@@ -217,7 +229,7 @@ void MediaTransmitter::fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq
 
 void MediaTransmitter::push_dummy_packet()
 {
-  // static uint16_t save_first_dummy_packet = false;
+  static uint16_t save_first_dummy_packet = false;
   tx_dummy_packet_counter.increment();
   int seq = sequence_id;
 
@@ -227,10 +239,10 @@ void MediaTransmitter::push_dummy_packet()
   sequence_id = (sequence_id + 1) % UINT16_MAX;
   fill_crc({p->data(), p->size()}, true);
 
-  // if (save_first_dummy_packet < 220) {
-  //   save_to_binary_file(p->data(), p->size(), "dummy_packet_" + std::to_string(seq) + ".bin");
-  //   save_first_dummy_packet++;
-  // }
+  if (save_first_dummy_packet < 220) {
+    save_to_binary_file(p->data(), p->size(), "dummy_packet_" + std::to_string(seq) + ".bin");
+    save_first_dummy_packet++;
+  }
   push_packet_to_send_queue(p);
 }
 

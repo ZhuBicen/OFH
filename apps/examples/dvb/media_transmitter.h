@@ -44,6 +44,7 @@ public:
                    uint16_t               speed_factor,
                    unsigned               initial_num_of_packet,
                    uint16_t               mtu_size,
+                   bool                   vairable_mtu,
                    kpi_counter&           tx_video_packet_counter_,
                    kpi_counter&           tx_dummy_packet_counter_);
   void set_eth_builder(srsran::ether::frame_builder* eth_builder_);
@@ -71,6 +72,7 @@ private:
   uint16_t     speed_factor;
   unsigned     initial_num_of_packet;
   uint16_t     mtu_size;
+  bool         variable_mtu;
   kpi_counter& tx_video_packet_counter;
   kpi_counter& tx_dummy_packet_counter;
 
