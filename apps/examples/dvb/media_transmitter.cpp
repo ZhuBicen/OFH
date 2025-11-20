@@ -56,6 +56,13 @@ static bool change_fifo_buffer_size(int fd)
   }
 }
 
+uint16_t get_packet_seq(const uint8_t* data, size_t size)
+{
+  const size_t mac_address_header_size = 12; // without vlan tag
+  auto         h                       = reinterpret_cast<const struct Header*>(data + mac_address_header_size);
+  return ntohs(h->sequence);
+}
+
 bool save_to_binary_file(const void* data_address, std::size_t data_length, const std::string& file_path)
 {
   std::ofstream output_file(file_path, std::ios::out | std::ios::binary);

@@ -26,7 +26,7 @@ bool PacketReceiver::receive_packet(RxPacket&& rxPacket)
     last_packet_time = std::chrono::steady_clock::now();
     return true;
   } else {
-    logger.error("Discarding old packet: seq= {}, , expected= {}, buffered={}, top={}",
+    logger.error("Discarding old packet: seq={}, expected={}, buffered={}, top={}",
                  rxPacket.sequence_number,
                  expected_seq,
                  packet_queue.size(),

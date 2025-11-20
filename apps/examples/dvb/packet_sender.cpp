@@ -1,4 +1,5 @@
 #include "packet_sender.h"
+#include "media_transmitter.h"
 
 #include <chrono>
 #include <future>
@@ -61,14 +62,11 @@ void PacketSender::send_loop()
         save_first_send_frame = false;
       }
       frame_burst.emplace_back(packet->data(), packet->size());
-      if (frame_burst.size() >= 1) {
-        transceiver.send(frame_burst);
-        frame_burst.clear();
-        std::this_thread::sleep_for(std::chrono::nanoseconds(packet_delay_in_nano_seconds));
-      }
-    }
-    if (!frame_burst.empty()) {
+      send_nano_seconds[get_packet_seq(packet->data(), packet->size())] =
+          std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::system_clock::now());
       transceiver.send(frame_burst);
+      frame_burst.clear();
+
       std::this_thread::sleep_for(std::chrono::nanoseconds(packet_delay_in_nano_seconds));
     }
   }

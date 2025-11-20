@@ -49,6 +49,7 @@
 
 #include "fmt/chrono.h"
 #include <arpa/inet.h>
+#include <chrono>
 #include <fcntl.h>
 #include <queue>
 #include <random>
@@ -81,6 +82,7 @@ static constexpr unsigned NOF_ETHERNET_FRAME_IN_AIR_FRAME = 3000;
 
 #include <iomanip>
 #include <sstream>
+using namespace std::chrono;
 
 std::string formatDataSpeed(double bps)
 {
@@ -149,8 +151,12 @@ class dvb_tx_sim : public frame_notifier
   kpi_counter                           tx_bytes;
   kpi_counter                           corrupt_counter;
   kpi_counter                           dropped_counter;
+  kpi_counter                           lantencies;
   std::unique_ptr<ether::frame_builder> eth_builder;
   unsigned                              nof_per_symbol;
+
+  int64_t min_latency = std::numeric_limits<int64_t>::max();
+  int64_t max_latency = 0;
 
   std::string      input_stream_file_name;
   std::string      output_stream_file_name;
@@ -211,8 +217,9 @@ public:
   void on_new_frame(unique_rx_buffer buffer) override
   {
     static unsigned save_received_frame = 0;
-    rx_total_counter.increment();
-    if (!save_executor.defer([this, b = std::move(buffer)] {
+    static unsigned counter             = 0;
+    auto recv_time = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::system_clock::now());
+    if (!save_executor.defer([this, b = std::move(buffer), recv_time] {
           size_t              ether_header_size = eth_builder->get_header_size().value();
           span<const uint8_t> frame = b.data().subspan(ether_header_size, b.data().size() - ether_header_size);
           // logger.info("Received new frame of size {}, payload {}", b.data().size(), frame.size());
@@ -223,8 +230,21 @@ public:
             logger.info("Saved received frame to 'received_frame.bin'");
             save_received_frame++;
           }
+          counter++;
           auto result = media_transmitter.forward_payload(frame);
           if (result == PayloadCheckResult::OK) {
+            uint16_t seq       = get_packet_seq(b.data().data(), b.data().size());
+            auto     send_time = packet_sender.get_send_time(seq);
+            auto     latency   = (recv_time.time_since_epoch() - send_time.time_since_epoch()).count();
+            if (latency < min_latency) {
+              min_latency = latency;
+            }
+            if (latency > max_latency) {
+              max_latency = latency;
+            }
+            latency = latency < 0 ? 0 : latency;
+            lantencies.increment(latency);
+            rx_total_counter.increment();
             video_rx_total_counter.increment();
           } else if (result == PayloadCheckResult::INVALID_SYNC_HEADER) {
             static int invalid_sync_header_num = 0;
@@ -258,15 +278,26 @@ public:
     uint64_t malformed      = corrupt_counter.get_value();
     uint64_t dropped        = dropped_counter.get_value();
     uint64_t tx_bytes_total = tx_bytes.get_value();
+    double   lantency       = 0;
+
+    if (rx_total) {
+      lantency = (double)lantencies.get_value() / rx_total;
+    }
 
     fmt::format_to(buffer,
-                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} |\n",
+                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} | {:^.2f} | {:^6} | {:^6} | \n",
                    current_time,
                    emu_id,
                    rx_total,
                    malformed,
                    dropped,
-                   formatDataSpeed(tx_bytes_total * 8 / seconds));
+                   formatDataSpeed(tx_bytes_total * 8 / seconds),
+                   lantency,
+                   min_latency,
+                   max_latency);
+
+    max_latency = 0;
+    min_latency = std::numeric_limits<int64_t>::max();
 
     fmt::print(to_c_str(buffer));
   }
@@ -508,13 +539,16 @@ int main(int argc, char** argv)
   }
   fmt::print("Running. Waiting for incoming packets...\n");
 
-  fmt::print("| {:^8} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} |\n",
+  fmt::print("| {:^8} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} |{:^11} |{:^11} |{:^11} |\n",
              "TIME",
              "ID",
              "RX_TOTAL",
              "TX_VIDEO",
              "TX_DUMMY",
-             "BITRATE");
+             "BITRATE",
+             "LATENCY(us)",
+             "Min(us)",
+             "Max(us)");
   std::string input;
   while (is_app_running) {
     for (unsigned i = 0, e = dvb_tx_sims.size(); i != e; ++i) {
