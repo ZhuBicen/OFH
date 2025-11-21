@@ -224,10 +224,8 @@ public:
           span<const uint8_t> frame = b.data().subspan(ether_header_size, b.data().size() - ether_header_size);
           // logger.info("Received new frame of size {}, payload {}", b.data().size(), frame.size());
           if (save_received_frame < 2) {
-            logger.info("Saving received frame to 'received_frame.bin'");
             save_to_binary_file(
                 b.data().data(), b.data().size(), "received_frame_" + std::to_string(save_received_frame) + ".bin");
-            logger.info("Saved received frame to 'received_frame.bin'");
             save_received_frame++;
           }
           counter++;
@@ -285,7 +283,7 @@ public:
     }
 
     fmt::format_to(buffer,
-                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} | {:^.2f} | {:^6} | {:^6} | \n",
+                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} | {:^8.2f} | {:^10} | {:^10} | \n",
                    current_time,
                    emu_id,
                    rx_total,
@@ -539,14 +537,14 @@ int main(int argc, char** argv)
   }
   fmt::print("Running. Waiting for incoming packets...\n");
 
-  fmt::print("| {:^8} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} |{:^11} |{:^11} |{:^11} |\n",
+  fmt::print("| {:^8} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} |{:^10} |{:^10} |{:^10} |\n",
              "TIME",
              "ID",
              "RX_TOTAL",
              "TX_VIDEO",
              "TX_DUMMY",
              "BITRATE",
-             "LATENCY(us)",
+             "Avg(us)",
              "Min(us)",
              "Max(us)");
   std::string input;
