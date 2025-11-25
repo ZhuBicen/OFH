@@ -48,7 +48,7 @@ bool save_to_binary_file(const void* data_address, std::size_t data_length, cons
 
 void PacketSender::send_loop()
 {
-  static bool save_first_send_frame = false;
+  static bool save_first_send_frame = true;
   while (true) {
     static_vector<span<const uint8_t>, 1> frame_burst;
     std::vector<Packet>                   cache_packets;
@@ -62,8 +62,12 @@ void PacketSender::send_loop()
         save_first_send_frame = false;
       }
       frame_burst.emplace_back(packet->data(), packet->size());
-      send_nano_seconds[get_packet_seq(packet->data(), packet->size())] =
-          std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::system_clock::now());
+      auto seq       = get_packet_seq(packet->data(), packet->size());
+      auto send_time = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::system_clock::now());
+      // logger.info(
+      //     "Sending packet with seq={} size={} at time {}", seq, packet->size(),
+      //     send_time.time_since_epoch().count());
+      send_nano_seconds[seq] = send_time;
       transceiver.send(frame_burst);
       frame_burst.clear();
 

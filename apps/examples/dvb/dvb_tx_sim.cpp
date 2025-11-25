@@ -234,6 +234,14 @@ public:
             uint16_t seq       = get_packet_seq(b.data().data(), b.data().size());
             auto     send_time = packet_sender.get_send_time(seq);
             auto     latency   = (recv_time.time_since_epoch() - send_time.time_since_epoch()).count();
+            if (latency < 0) {
+              logger.warning("Negative latency detected: seq {}, {}, {} <-> {}",
+                             seq,
+                             latency,
+                             recv_time.time_since_epoch(),
+                             send_time.time_since_epoch());
+              latency = 0;
+            }
             if (latency < min_latency) {
               min_latency = latency;
             }
@@ -291,7 +299,7 @@ public:
                    dropped,
                    formatDataSpeed(tx_bytes_total * 8 / seconds),
                    lantency,
-                   min_latency,
+                   min_latency == std::numeric_limits<int64_t>::max() ? "N/A" : std::to_string(min_latency),
                    max_latency);
 
     max_latency = 0;
