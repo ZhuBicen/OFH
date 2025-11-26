@@ -254,8 +254,8 @@ public:
             video_rx_total_counter.increment();
           } else if (result == PayloadCheckResult::INVALID_SYNC_HEADER) {
             static int invalid_sync_header_num = 0;
-            save_to_binary_file(frame.data(),
-                                frame.size(),
+            save_to_binary_file(b.data().data(),
+                                b.data().size(),
                                 "frame_invalid_sync_header_" + std::to_string(invalid_sync_header_num++) + ".bin");
           }
         })) {
