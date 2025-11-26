@@ -18,6 +18,6 @@ dvb_tx_sim:
       output_file: /tmp/output_stream2
       speed_factor: 200                       # Speed factor for simulation
       initial_num_of_packet: 0             # Initial number of packets to send
-      packet_delay_in_nano_seconds: 1000    # Delay between packets in nanoseconds
+      packet_delay_in_nano_seconds: 45000    # Delay between packets in nanoseconds
 # dpdk:
 #   eal_args: "--lcores (0-1)@(0-15)"

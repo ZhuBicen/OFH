@@ -72,8 +72,6 @@ void dpdk_receiver_impl::start(frame_notifier& notifier_)
 
   // Block waiting for timing executor to start.
   fut.wait();
-
-  logger.info("Started the DPDK ethernet frame receiver");
 }
 
 void dpdk_receiver_impl::stop()

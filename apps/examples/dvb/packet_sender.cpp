@@ -30,8 +30,6 @@ PacketSender::PacketSender(srslog::basic_logger&   logger_,
 
 void PacketSender::start()
 {
-  logger.info("Starting packet sender ... packet delay in nano seconds: {}", packet_delay_in_nano_seconds);
-
   std::promise<void> p;
   std::future<void>  fut = p.get_future();
 
@@ -42,7 +40,6 @@ void PacketSender::start()
     report_fatal_error("Failed to defer packet processing task");
   }
   fut.wait();
-  logger.info("Packet sender started successfully");
 }
 bool save_to_binary_file(const void* data_address, std::size_t data_length, const std::string& file_path);
 

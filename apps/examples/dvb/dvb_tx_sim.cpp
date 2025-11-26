@@ -265,7 +265,6 @@ public:
 
   void start()
   {
-    logger.info("Starting DVB TX simulator transceiver ...");
     transceiver.start(*this);
     media_transmitter.start();
     packet_sender.start();

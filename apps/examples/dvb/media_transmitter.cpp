@@ -142,9 +142,6 @@ void MediaTransmitter::calcaute_dummy_packet_crc()
     span<uint8_t> crc_payload(dummy_ethernet_frame->data() + eth_header + sizeof(SYNC_HEAD),
                               span<uint8_t>::size_type(length + 2));
     g_dummy_packets_crc[i] = get_crc(crc_payload, i, false);
-    if (i % 10000 == 0) {
-      logger.info("Calculating dummy packet seq {}, crc 0x{:04X}", i, g_dummy_packets_crc[i]);
-    }
   }
 }
 
@@ -195,9 +192,7 @@ void MediaTransmitter::set_eth_builder(srsran::ether::frame_builder* eth_builder
   eth_builder     = eth_builder_;
   ether_head_size = eth_builder->get_header_size().value();
   create_dummy_ethernet_frame(0);
-  logger.info("dummy packet created");
   calcaute_dummy_packet_crc();
-  logger.info("dummy packet crc generated");
 }
 
 MediaTransmitter::~MediaTransmitter()
@@ -212,7 +207,6 @@ MediaTransmitter::~MediaTransmitter()
 
 void MediaTransmitter::start()
 {
-  logger.info("Starting media producer ...");
   std::promise<void> p;
   std::future<void>  fut = p.get_future();
 
@@ -224,7 +218,6 @@ void MediaTransmitter::start()
   }
 
   fut.wait();
-  logger.info("Media producer started successfully");
 }
 
 void MediaTransmitter::fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq)

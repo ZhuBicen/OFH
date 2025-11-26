@@ -95,8 +95,6 @@ receiver_impl::~receiver_impl()
 
 void receiver_impl::start(frame_notifier& notifier_)
 {
-  logger.info("Starting the ethernet frame receiver");
-
   notifier = std::ref(notifier_);
 
   std::promise<void> p;
@@ -113,8 +111,6 @@ void receiver_impl::start(frame_notifier& notifier_)
 
   // Block waiting for timing executor to start.
   fut.wait();
-
-  logger.info("Started the ethernet frame receiver");
 }
 
 void receiver_impl::stop()
