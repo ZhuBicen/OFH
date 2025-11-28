@@ -121,6 +121,7 @@ struct dvb_tx_sim_config {
   unsigned    initial_num_of_packet;
   unsigned    packet_delay_in_nano_seconds;
   bool        variable_mtu;
+  unsigned    bitrate; // in Mbps
   std::string input_file;
   std::string output_file;
 };
@@ -193,6 +194,7 @@ public:
                       cfg_.initial_num_of_packet,
                       cfg_.mtu,
                       cfg_.variable_mtu,
+                      cfg_.bitrate,
                       corrupt_counter,
                       dropped_counter),
     packet_sender(logger_, tx_executor, transceiver_, packet_queue, tx_bytes, cfg_.packet_delay_in_nano_seconds)
@@ -513,6 +515,7 @@ int main(int argc, char** argv)
   emu_cfg.speed_factor                 = dvb_tx_sim_cfg.speed_factor;
   emu_cfg.initial_num_of_packet        = dvb_tx_sim_cfg.initial_num_of_packet;
   emu_cfg.packet_delay_in_nano_seconds = dvb_tx_sim_cfg.packet_delay_in_nano_seconds;
+  emu_cfg.bitrate                      = dvb_tx_sim_cfg.bitrate;
   emu_cfg.vlan_tag                     = dvb_tx_sim_cfg.vlan_tag;
   emu_cfg.mtu                          = dvb_tx_sim_cfg.mtu;
   emu_cfg.variable_mtu                 = dvb_tx_sim_cfg.variable_mtu;
@@ -528,6 +531,7 @@ int main(int argc, char** argv)
   logger.info("variable mtu? {}", emu_cfg.variable_mtu);
   logger.info("initial_num_of_packet {}", emu_cfg.initial_num_of_packet);
   logger.info("packet_delay_in_nano_seconds {}", emu_cfg.packet_delay_in_nano_seconds);
+  logger.info("bitrate (Mbps) {}", emu_cfg.bitrate);
   logger.info("------------------------------------------");
 
   // Create timing worker.

@@ -57,6 +57,7 @@ struct dvb_tx_sim_ofh_appconfig {
   unsigned    initial_num_of_packet        = 220;
   unsigned    packet_delay_in_nano_seconds = 0;
   bool        variable_mtu                 = false;
+  unsigned    bitrate                      = 100; // in Mbps
 };
 
 /// RU emulator logging parameters.

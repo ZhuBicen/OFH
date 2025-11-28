@@ -45,6 +45,7 @@ public:
                    unsigned               initial_num_of_packet,
                    uint16_t               mtu_size,
                    bool                   vairable_mtu,
+                   unsigned               bitrate,
                    kpi_counter&           tx_video_packet_counter_,
                    kpi_counter&           tx_dummy_packet_counter_);
   void set_eth_builder(srsran::ether::frame_builder* eth_builder_);
@@ -73,6 +74,7 @@ private:
   unsigned     initial_num_of_packet;
   uint16_t     mtu_size;
   bool         variable_mtu;
+  unsigned     bitrate;
   kpi_counter& tx_video_packet_counter;
   kpi_counter& tx_dummy_packet_counter;
 
@@ -84,13 +86,14 @@ private:
   void fill_crc(span<uint8_t> payload, bool dummy);
   void fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq);
 
-  void push_dummy_packet();
+  size_t push_dummy_packet();
 
   void push_packet_to_send_queue(srsran::Packet packet);
 
   srsran::Packet       dummy_ethernet_frame;
   uint16_t             ether_head_size = 0;
-  static constexpr int CRC_LENGTH      = sizeof(uint16_t);
+  uint64_t             delay_per_packet_in_nano_seconds;
+  static constexpr int CRC_LENGTH = sizeof(uint16_t);
 };
 uint16_t get_packet_seq(const uint8_t* data, size_t size);
 bool     save_to_binary_file(const void* data_address, std::size_t data_length, const std::string& file_path);

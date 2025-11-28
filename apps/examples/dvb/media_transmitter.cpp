@@ -154,6 +154,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
                                    unsigned               initial_num_of_packet_,
                                    uint16_t               mtu_size_,
                                    bool                   variable_mtu_,
+                                   unsigned               bitrate_,
                                    kpi_counter&           tx_video_packet_counter_,
                                    kpi_counter&           tx_dummy_packet_counter_) :
   packet_receiver(logger_),
@@ -168,8 +169,10 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   initial_num_of_packet(initial_num_of_packet_),
   mtu_size(mtu_size_),
   variable_mtu(variable_mtu_),
+  bitrate(bitrate_),
   tx_video_packet_counter(tx_video_packet_counter_),
-  tx_dummy_packet_counter(tx_dummy_packet_counter_)
+  tx_dummy_packet_counter(tx_dummy_packet_counter_),
+  delay_per_packet_in_nano_seconds((1000000000ULL * 8 * mtu_size_ / (bitrate_ * 1000000ULL)))
 {
   // Initialize video tunnels
   if (!open_video_tunnel_in()) {
@@ -227,9 +230,8 @@ void MediaTransmitter::fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq
   memcpy(payload.data() + eth_header + sizeof(SYNC_HEAD) + sizeof(Header::length), &sequence, sizeof(seq));
 }
 
-void MediaTransmitter::push_dummy_packet()
+size_t MediaTransmitter::push_dummy_packet()
 {
-  static uint16_t save_first_dummy_packet = false;
   tx_dummy_packet_counter.increment();
   int seq = sequence_id;
 
@@ -238,12 +240,8 @@ void MediaTransmitter::push_dummy_packet()
   fill_dummy_packet_seq({p->data(), p->size()}, seq);
   sequence_id = (sequence_id + 1) % UINT16_MAX;
   fill_crc({p->data(), p->size()}, true);
-
-  if (save_first_dummy_packet < 220) {
-    save_to_binary_file(p->data(), p->size(), "dummy_packet_" + std::to_string(seq) + ".bin");
-    save_first_dummy_packet++;
-  }
   push_packet_to_send_queue(p);
+  return p->size();
 }
 
 void MediaTransmitter::push_packet_to_send_queue(srsran::Packet packet)
@@ -266,11 +264,24 @@ void MediaTransmitter::fill_crc(span<uint8_t> payload, bool dummy)
   memcpy(payload.data() + eth_header + sizeof(SYNC_HEAD) + sizeof(Header::length) + length, &crc, sizeof(crc));
 }
 
+using NanoSecond = std::chrono::time_point<std::chrono::system_clock, std::chrono::nanoseconds>;
+
 void MediaTransmitter::generate_media()
 {
+  using namespace std::chrono;
+  auto     start_time      = steady_clock::now();
+  uint64_t total_bits_sent = 0;
   // static bool save_first_video_packet = true;
   for (unsigned i = 0; i < initial_num_of_packet || initial_num_of_packet == 0; i++) {
-    push_dummy_packet();
+    auto     now              = steady_clock::now();
+    auto     elapsed          = duration_cast<microseconds>(now - start_time).count();
+    uint64_t should_have_sent = (bitrate * elapsed);
+    if (total_bits_sent < should_have_sent) {
+      total_bits_sent += (push_dummy_packet() * 8);
+    } else {
+      std::this_thread::sleep_for(std::chrono::nanoseconds(100));
+      // precise_sleep_ns(100);
+    }
   }
   while (true) {
     if (video_tunnel_in == -1) {

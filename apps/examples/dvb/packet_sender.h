@@ -9,7 +9,7 @@
 #include <atomic>
 #include <cstdint>
 
-using NanoSecond = std::chrono::time_point<std::chrono::system_clock, std::chrono::microseconds>;
+using MicroSecond = std::chrono::time_point<std::chrono::system_clock, std::chrono::microseconds>;
 
 namespace srsran {
 class PacketSender
@@ -23,7 +23,7 @@ class PacketSender
 
   void send_loop();
 
-  std::array<NanoSecond, std::numeric_limits<uint16_t>::max()> send_nano_seconds;
+  std::array<MicroSecond, std::numeric_limits<uint16_t>::max()> send_nano_seconds;
 
 public:
   PacketSender(srslog::basic_logger&   logger_,
@@ -32,7 +32,7 @@ public:
                PacketQueue&            queue_,
                kpi_counter&            tx_bytes_,
                unsigned                packet_delay_in_nano_seconds_);
-  void       start();
-  NanoSecond get_send_time(uint16_t seq) { return send_nano_seconds[seq]; }
+  void        start();
+  MicroSecond get_send_time(uint16_t seq) { return send_nano_seconds[seq]; }
 };
 } // namespace srsran
