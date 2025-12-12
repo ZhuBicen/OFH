@@ -51,6 +51,7 @@
 #include <arpa/inet.h>
 #include <chrono>
 #include <fcntl.h>
+#include <filesystem>
 #include <queue>
 #include <random>
 #include <signal.h>
@@ -124,6 +125,7 @@ struct dvb_tx_sim_config {
   unsigned    bitrate; // in Mbps
   std::string input_file;
   std::string output_file;
+  std::string log_dir;
 };
 
 } // namespace
@@ -213,6 +215,7 @@ public:
     }
 
     media_transmitter.set_eth_builder(eth_builder.get());
+    set_log_dir(cfg.log_dir);
   }
 
   // See interface for documentation.
@@ -436,6 +439,16 @@ void sigpipe_handler(int signo)
   // For this example, we'll just print a message.
 }
 
+std::string get_log_dir(const std::string& log_filename)
+{
+  size_t pos = log_filename.find_last_of("/\\");
+  if (pos == std::string::npos) {
+    return "logs";
+  } else {
+    return log_filename.substr(0, pos);
+  }
+}
+
 int main(int argc, char** argv)
 {
   ::signal(SIGPIPE, sigpipe_handler);
@@ -526,6 +539,21 @@ int main(int argc, char** argv)
   emu_cfg.vlan_tag                     = dvb_tx_sim_cfg.vlan_tag;
   emu_cfg.mtu                          = dvb_tx_sim_cfg.mtu;
   emu_cfg.variable_mtu                 = dvb_tx_sim_cfg.variable_mtu;
+  emu_cfg.log_dir                      = get_log_dir(dvb_tx_sim_parsed_cfg.log_cfg.filename);
+
+  // Ensure the log directory exists; create it if it does not.
+  if (!emu_cfg.log_dir.empty()) {
+    std::error_code       ec;
+    std::filesystem::path log_dir_path(emu_cfg.log_dir);
+    if (!std::filesystem::exists(log_dir_path, ec)) {
+      if (!std::filesystem::create_directories(log_dir_path, ec)) {
+        logger.warning("Could not create log directory '{}': {}", emu_cfg.log_dir, ec.message());
+      } else {
+        logger.info("Created log directory '{}'", emu_cfg.log_dir);
+      }
+    }
+  }
+
   if (!parse_mac_address(dvb_tx_sim_cfg.src_mac_address, emu_cfg.src_mac)) {
     report_error("Invalid MAC address provided: '{}'", dvb_tx_sim_cfg.src_mac_address);
   }

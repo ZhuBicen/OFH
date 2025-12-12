@@ -33,6 +33,8 @@ struct Header {
   uint16_t media_length;
 } __attribute__((packed));
 
+void set_log_dir(const std::string& log_dir);
+
 class MediaTransmitter
 {
 public:

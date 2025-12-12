@@ -63,9 +63,16 @@ uint16_t get_packet_seq(const uint8_t* data, size_t size)
   return ntohs(h->sequence);
 }
 
+std::string g_log_dir;
+
+void set_log_dir(const std::string& log_dir)
+{
+  g_log_dir = log_dir;
+}
+
 bool save_to_binary_file(const void* data_address, std::size_t data_length, const std::string& file_path)
 {
-  std::ofstream output_file(file_path, std::ios::out | std::ios::binary);
+  std::ofstream output_file(g_log_dir + "/" + file_path, std::ios::out | std::ios::binary);
 
   if (!output_file.is_open()) {
     std::cerr << "Error: Could not open file " << file_path << " for writing." << std::endl;
