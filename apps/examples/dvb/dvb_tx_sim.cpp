@@ -198,7 +198,7 @@ public:
                       cfg_.variable_mtu,
                       cfg_.bitrate,
                       corrupt_counter,
-                      dropped_counter),
+                      tx_total_counter),
     packet_sender(logger_, tx_executor, transceiver_, packet_queue, tx_bytes, cfg_.packet_delay_in_nano_seconds)
   {
     seq_counters.insert(0, 0);
@@ -223,16 +223,22 @@ public:
   {
     static unsigned save_received_frame = 0;
     static unsigned counter             = 0;
+    static unsigned save_droped_frame   = 0;
     auto recv_time = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::system_clock::now());
     if (!save_executor.defer([this, b = std::move(buffer), recv_time] {
           size_t              ether_header_size = eth_builder->get_header_size().value();
           span<const uint8_t> frame = b.data().subspan(ether_header_size, b.data().size() - ether_header_size);
 
           auto mac_address = b.data().subspan(ETH_ADDR_LEN, ether::ETH_ADDR_LEN);
-          if (mac_address[0] != cfg.src_mac[0] || mac_address[1] != cfg.src_mac[1] ||
-              mac_address[2] != cfg.src_mac[2] || mac_address[3] != cfg.src_mac[3] ||
-              mac_address[4] != cfg.src_mac[4] || mac_address[5] != cfg.src_mac[5]) {
-            // Not for us
+          if (mac_address[0] != cfg.dst_mac[0] || mac_address[1] != cfg.dst_mac[1] ||
+              mac_address[2] != cfg.dst_mac[2] || mac_address[3] != cfg.dst_mac[3] ||
+              mac_address[4] != cfg.dst_mac[4] || mac_address[5] != cfg.dst_mac[5]) {
+            dropped_counter.increment();
+            if (save_droped_frame < 10) {
+              save_to_binary_file(
+                  b.data().data(), b.data().size(), "dropped_frame_" + std::to_string(save_droped_frame) + ".bin");
+              save_droped_frame++;
+            }
             return;
           }
 
@@ -285,15 +291,22 @@ public:
 
   void print_statistics(unsigned emu_id)
   {
-    fmt::memory_buffer buffer;
-    static auto        last_time = std::chrono::system_clock::now();
-
-    auto   now              = std::chrono::system_clock::now();
-    double seconds          = std::chrono::duration<double>(now - last_time).count();
+    fmt::memory_buffer                                                       buffer;
+    static std::optional<std::chrono::time_point<std::chrono::system_clock>> last_time;
+    auto                                                                     now     = std::chrono::system_clock::now();
+    double                                                                   seconds = 0.0f;
+    if (!last_time) {
+      last_time = std::chrono::system_clock::now();
+      seconds   = 0.0f;
+    } else {
+      seconds    = std::chrono::duration<double>(now - *last_time).count();
+      *last_time = now;
+    }
     last_time               = now;
     std::tm  current_time   = fmt::gmtime(std::chrono::system_clock::to_time_t(now));
     uint64_t rx_total       = rx_total_counter.get_value();
     uint64_t malformed      = corrupt_counter.get_value();
+    uint64_t tx_total       = tx_total_counter.get_value();
     uint64_t dropped        = dropped_counter.get_value();
     uint64_t tx_bytes_total = tx_bytes.get_value();
     double   lantency       = 0;
@@ -303,13 +316,13 @@ public:
     }
 
     fmt::format_to(buffer,
-                   "| {:%H:%M:%S} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} | {:^8.2f} | {:^10} | {:^10} | \n",
+                   "| {:%H:%M:%S} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} | {:^8.2f} | {:^10} | {:^10} | \n",
                    current_time,
-                   emu_id,
                    rx_total,
+                   tx_total,
                    malformed,
                    dropped,
-                   formatDataSpeed(tx_bytes_total * 8 / seconds),
+                   seconds != 0 ? formatDataSpeed(tx_bytes_total * 8 / seconds) : "N/A",
                    lantency,
                    min_latency == std::numeric_limits<int64_t>::max() ? "N/A" : std::to_string(min_latency),
                    max_latency);
@@ -583,30 +596,27 @@ int main(int argc, char** argv)
   }
   fmt::print("Running. Waiting for incoming packets...\n");
 
-  fmt::print("| {:^8} | {:^3} | {:^11} | {:^11} | {:^11} | {:^11} |{:^10} |{:^10} |{:^10} |\n",
+  fmt::print("> | {:^8} | {:^11} | {:^11} | {:^11} | {:^11} | {:^11} |{:^10} |{:^10} |{:^10} |\n",
              "TIME",
-             "ID",
-             "RX_TOTAL",
-             "TX_VIDEO",
-             "TX_DUMMY",
-             "BITRATE",
+             "RX",
+             "TX",
+             "Corrupt",
+             "Dropped",
+             "Bitrate",
              "Avg(us)",
              "Min(us)",
              "Max(us)");
   std::string input;
   while (is_app_running) {
-    for (unsigned i = 0, e = dvb_tx_sims.size(); i != e; ++i) {
-      dvb_tx_sims[i]->print_statistics(i);
-    }
-    std::cout << "dvb>";
+    std::cout << "> ";
     getline(std::cin, input);
-    if (input == "save") {
-      for (unsigned i = 0, e = dvb_tx_sims.size(); i != e; ++i) {
-        dvb_tx_sims[i]->save_frame();
-      }
-    } else if (input == "exit") {
+    if (input == "exit") {
       is_app_running = false;
       break;
+    } else {
+      for (unsigned i = 0, e = dvb_tx_sims.size(); i != e; ++i) {
+        dvb_tx_sims[i]->print_statistics(i);
+      }
     }
   }
 

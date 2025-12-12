@@ -162,7 +162,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
                                    uint16_t               mtu_size_,
                                    bool                   variable_mtu_,
                                    unsigned               bitrate_,
-                                   kpi_counter&           tx_video_packet_counter_,
+                                   kpi_counter&           corrupt_packet_counter_,
                                    kpi_counter&           tx_dummy_packet_counter_) :
   packet_receiver(logger_),
   packet_queue(packet_queue_),
@@ -177,7 +177,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   mtu_size(mtu_size_),
   variable_mtu(variable_mtu_),
   bitrate(bitrate_),
-  tx_video_packet_counter(tx_video_packet_counter_),
+  corrupt_packet_counter(corrupt_packet_counter_),
   tx_dummy_packet_counter(tx_dummy_packet_counter_),
   delay_per_packet_in_nano_seconds((1000000000ULL * 8 * mtu_size_ / (bitrate_ * 1000000ULL)))
 {
@@ -398,12 +398,14 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
   uint16_t seq_id                = header.sequence;
   if (header.sync_header != SYNC_HEAD) {
     logger.error("Invalid sync header in payload {}", packet_receiver.get_expected_seq());
+    corrupt_packet_counter.increment();
     return PayloadCheckResult::INVALID_SYNC_HEADER;
   }
   if (header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t) != payload.size()) {
     logger.error("Payload length mismatch: expected {}, got {}",
                  header.length + sizeof(SYNC_HEAD) + sizeof(Header::length) + sizeof(uint16_t),
                  payload.size());
+    corrupt_packet_counter.increment();
     save_to_binary_file(payload.data(), payload.size(), "mismatched_length.bin");
     return PayloadCheckResult::INVALID_LENGTH;
   }
@@ -416,6 +418,7 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
                  seq_id,
                  received_crc,
                  expected_crc);
+    corrupt_packet_counter.increment();
     save_to_binary_file(payload.data(), payload.size(), "invalid_crc_seq_" + std::to_string(seq_id) + ".bin");
     return PayloadCheckResult::INVALID_CRC;
   }

@@ -48,7 +48,7 @@ public:
                    uint16_t               mtu_size,
                    bool                   vairable_mtu,
                    unsigned               bitrate,
-                   kpi_counter&           tx_video_packet_counter_,
+                   kpi_counter&           corrupt_packet_counter_,
                    kpi_counter&           tx_dummy_packet_counter_);
   void set_eth_builder(srsran::ether::frame_builder* eth_builder_);
   ~MediaTransmitter();
@@ -77,7 +77,7 @@ private:
   uint16_t     mtu_size;
   bool         variable_mtu;
   unsigned     bitrate;
-  kpi_counter& tx_video_packet_counter;
+  kpi_counter& corrupt_packet_counter;
   kpi_counter& tx_dummy_packet_counter;
 
   bool open_video_tunnel_in();
