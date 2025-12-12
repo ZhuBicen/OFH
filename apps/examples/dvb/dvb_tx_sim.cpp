@@ -224,7 +224,15 @@ public:
     if (!save_executor.defer([this, b = std::move(buffer), recv_time] {
           size_t              ether_header_size = eth_builder->get_header_size().value();
           span<const uint8_t> frame = b.data().subspan(ether_header_size, b.data().size() - ether_header_size);
-          // logger.info("Received new frame of size {}, payload {}", b.data().size(), frame.size());
+
+          auto mac_address = b.data().subspan(ETH_ADDR_LEN, ether::ETH_ADDR_LEN);
+          if (mac_address[0] != cfg.src_mac[0] || mac_address[1] != cfg.src_mac[1] ||
+              mac_address[2] != cfg.src_mac[2] || mac_address[3] != cfg.src_mac[3] ||
+              mac_address[4] != cfg.src_mac[4] || mac_address[5] != cfg.src_mac[5]) {
+            // Not for us
+            return;
+          }
+
           if (save_received_frame < 2) {
             save_to_binary_file(
                 b.data().data(), b.data().size(), "received_frame_" + std::to_string(save_received_frame) + ".bin");
@@ -411,6 +419,7 @@ static constexpr unsigned MAX_CONFIG_FILES = 1;
 /// Function to call when the application is interrupted.
 static void interrupt_signal_handler()
 {
+  fmt::print(stderr, "Interrupt signal received. Stopping application...\n");
   is_app_running = false;
 }
 
@@ -446,9 +455,7 @@ int main(int argc, char** argv)
   configure_cli11_with_dvb_tx_sim_appconfig_schema(app, dvb_tx_sim_parsed_cfg);
 
   // Parse arguments.
-  std::cout << "Parsing command line arguments..." << std::endl;
   CLI11_PARSE(app, argc, argv);
-  std::cout << "Command line arguments parsed." << std::endl;
 
   // Set up logging.
   srslog::sink* log_sink = (dvb_tx_sim_parsed_cfg.log_cfg.filename == "stdout")
