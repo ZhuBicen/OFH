@@ -95,7 +95,8 @@ private:
   srsran::Packet       dummy_ethernet_frame;
   uint16_t             ether_head_size = 0;
   uint64_t             delay_per_packet_in_nano_seconds;
-  static constexpr int CRC_LENGTH = sizeof(uint16_t);
+  int                  invalid_crc_num = 0;
+  static constexpr int CRC_LENGTH      = sizeof(uint16_t);
 };
 uint16_t get_packet_seq(const uint8_t* data, size_t size);
 bool     save_to_binary_file(const void* data_address, std::size_t data_length, const std::string& file_path);

@@ -419,7 +419,10 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
                  received_crc,
                  expected_crc);
     corrupt_packet_counter.increment();
-    save_to_binary_file(payload.data(), payload.size(), "invalid_crc_seq_" + std::to_string(seq_id) + ".bin");
+    if (invalid_crc_num < 3) {
+      save_to_binary_file(payload.data(), payload.size(), "invalid_crc_seq_" + std::to_string(seq_id) + ".bin");
+      invalid_crc_num++;
+    }
     return PayloadCheckResult::INVALID_CRC;
   }
 
