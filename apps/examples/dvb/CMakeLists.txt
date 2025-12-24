@@ -37,6 +37,8 @@ add_executable(dvb_tx_sim ${SOURCES})
 target_include_directories(dvb_tx_sim PRIVATE ${CMAKE_SOURCE_DIR})
 include_directories(${CMAKE_SOURCE_DIR}/external)
 target_link_libraries(dvb_tx_sim srslog srsran_ofh srsran_phy_support srsran_support)
+# Enable debug symbols for all build types
+target_compile_options(dvb_tx_sim PRIVATE -g)
 
 if (DPDK_FOUND)
     target_compile_options(dvb_tx_sim PRIVATE ${DPDK_CFLAGS})

@@ -314,6 +314,10 @@ public:
       lantency = (double)lantencies.get_value() / rx_total;
     }
 
+    if (!rx_total && tx_total) {
+      logger.error("No valid packets received, but {} packets transmitted!", tx_total);
+    }
+
     fmt::format_to(buffer,
                    "| {:%H:%M:%S} | {:^11} | {:^11} | {:^11} | {:^11} | {:^10.2f} | {:^10} | {:^10} | \n",
                    current_time,

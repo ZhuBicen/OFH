@@ -30,7 +30,7 @@ bool PacketReceiver::receive_packet(RxPacket&& rxPacket)
                  rxPacket.sequence_number,
                  expected_seq,
                  packet_queue.size(),
-                 packet_queue.top().sequence_number);
+                 -1 ? packet_queue.empty() : packet_queue.top().sequence_number);
     last_packet_time = std::chrono::steady_clock::now();
     return false;
   }
