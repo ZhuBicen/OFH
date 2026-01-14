@@ -279,12 +279,13 @@ void MediaTransmitter::generate_media()
   auto     start_time      = steady_clock::now();
   uint64_t total_bits_sent = 0;
   // static bool save_first_video_packet = true;
-  for (unsigned i = 0; i < initial_num_of_packet || initial_num_of_packet == 0; i++) {
+  for (unsigned i = 0; i < initial_num_of_packet || initial_num_of_packet == 0;) {
     auto     now              = steady_clock::now();
     auto     elapsed          = duration_cast<microseconds>(now - start_time).count();
     uint64_t should_have_sent = (bitrate * elapsed);
     if (total_bits_sent < should_have_sent) {
       total_bits_sent += (push_dummy_packet() * 8);
+      i++;
     } else {
       std::this_thread::sleep_for(std::chrono::nanoseconds(100));
       // precise_sleep_ns(100);
