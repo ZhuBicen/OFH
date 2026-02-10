@@ -88,7 +88,7 @@ using namespace std::chrono;
 std::string formatDataSpeed(double bps)
 {
   std::stringstream ss;
-  ss << std::fixed << std::setprecision(2); // Set 2 decimal places
+  ss << std::fixed << std::setprecision(4); // Set 2 decimal places
 
   if (bps >= 1'000'000'000) { // 1 Gbps = 10^9 bps
     ss << bps / 1'000'000'000 << " Gbps";
@@ -319,12 +319,12 @@ public:
     }
 
     fmt::format_to(buffer,
-                   "| {:%H:%M:%S} | {:^11} | {:^11} | {:^11} | {:^11} | {:^10.2f} | {:^10} | {:^10} | \n",
+                   "| {:%H:%M:%S} | {:^11} | {:^11} | {:^11} | {:^16} | {:^10.2f} | {:^10} | {:^10} | \n",
                    current_time,
                    rx_total,
                    tx_total,
                    malformed,
-                   seconds != 0 ? formatDataSpeed(tx_bytes_total * 8 / seconds) : "N/A",
+                   seconds != 0 ? formatDataSpeed((double)tx_bytes_total * 8 / seconds) : "N/A",
                    lantency,
                    min_latency == std::numeric_limits<int64_t>::max() ? "N/A" : std::to_string(min_latency),
                    max_latency);
@@ -598,7 +598,7 @@ int main(int argc, char** argv)
   }
   fmt::print("Running. Waiting for incoming packets...\n");
 
-  fmt::print("> | {:^8} | {:^11} | {:^11} | {:^11} | {:^11} | {:^10} | {:^10} | {:^10} |\n",
+  fmt::print("> | {:^8} | {:^11} | {:^11} | {:^11} | {:^16} | {:^10} | {:^10} | {:^10} |\n",
              "TIME",
              "RX",
              "TX",

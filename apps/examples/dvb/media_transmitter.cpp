@@ -287,7 +287,7 @@ void MediaTransmitter::generate_media()
       total_bits_sent += (push_dummy_packet() * 8);
       i++;
     } else {
-      std::this_thread::sleep_for(std::chrono::nanoseconds(100));
+      std::this_thread::sleep_for(std::chrono::nanoseconds(10));
       // precise_sleep_ns(100);
     }
   }
