@@ -36,6 +36,13 @@ bool PacketReceiver::receive_packet(RxPacket&& rxPacket)
   }
 }
 
+static bool isImmediatePredecessor(uint16_t expected, uint16_t current) {
+  if (expected == 0) {
+    return current == 65534;
+  }
+  return current == expected - 1;
+}
+
 std::vector<RxPacket> PacketReceiver::get_sorted_packets()
 {
   std::vector<RxPacket> sorted_packets;
@@ -48,8 +55,14 @@ std::vector<RxPacket> PacketReceiver::get_sorted_packets()
     if (top.sequence_number == expected_seq) {
       sorted_packets.push_back(std::move(top));
       packet_queue.pop();
+      while (!packet_queue.empty() && packet_queue.top().sequence_number == expected_seq) {
+        logger.error("Detected duplicated packet s1, seq = {}", expected_seq);
+        packet_queue.pop();
+      }
       expected_seq = (expected_seq + 1) % UINT16_MAX;
-    } else if (timeout || packet_queue.size() >= MAX_GAP) {
+    } else if (isImmediatePredecessor(expected_seq, top.sequence_number)) {
+      logger.error("Detected duplicated packet s2, seq = {}", top.sequence_number);
+    }else if (timeout || packet_queue.size() >= MAX_GAP) {
       logger.error(
           "Detected packet loss: seq [{}, {}), buffered={}", expected_seq, top.sequence_number, packet_queue.size());
       expected_seq = top.sequence_number;
