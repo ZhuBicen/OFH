@@ -8,6 +8,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <sstream>
 #include <memory>
 #include <sys/stat.h>
 #include <thread>
@@ -181,6 +182,8 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   tx_dummy_packet_counter(tx_dummy_packet_counter_),
   delay_per_packet_in_nano_seconds((1000000000ULL * 8 * mtu_size_ / (bitrate_ * 1000000ULL)))
 {
+  // do not persist all sequence ids to a big binary file anymore;
+  // use an in-memory 128-entry ring buffer to cache the latest seq ids
   // Initialize video tunnels
   if (!open_video_tunnel_in()) {
     logger.error("Failed to open video in tunnels");
@@ -429,7 +432,30 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
 
   std::vector<uint8_t> data(payload.data() + sizeof(Header), payload.data() + sizeof(Header) + header.media_length);
   packet_receiver.receive_packet(srsran::RxPacket(seq_id, std::move(data)));
-  const auto& sorted_packets = packet_receiver.get_sorted_packets();
+
+  // cache latest 128 seq IDs (overwrite oldest when full)
+  seq_cache[seq_cache_index] = seq_id;
+  seq_cache_index = (seq_cache_index + 1) & 0x7F; // mod 128
+  if (seq_cache_count < 128) {
+    ++seq_cache_count;
+  }
+  bool is_packet_loss_detected = false;
+  const auto& sorted_packets = packet_receiver.get_sorted_packets(is_packet_loss_detected);
+  if (is_packet_loss_detected) {
+    // print the cached seq ids (oldest -> newest)
+    std::ostringstream oss;
+    oss << "Packet loss detected when processing sequence " << seq_id << ", last " << seq_cache_count
+        << " seq ids: ";
+    size_t start = (seq_cache_index + 128 - seq_cache_count) & 0x7F;
+    for (size_t i = 0; i < seq_cache_count; ++i) {
+      size_t idx = (start + i) & 0x7F;
+      if (i) {
+        oss << ",";
+      }
+      oss << seq_cache[idx];
+    }
+    logger.warning("{}", oss.str());
+  }
   for (const auto& rx_packet : sorted_packets) {
     if (rx_packet.data.size() != 0) {
       ssize_t bytes_written = write(video_tunnel_out, rx_packet.data.data(), rx_packet.data.size());

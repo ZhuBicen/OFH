@@ -12,6 +12,7 @@
 #include <optional>
 #include <stdint.h>
 #include <string>
+#include <fstream> // for std::ofstream used in class member
 
 using srsran::span;
 
@@ -79,6 +80,15 @@ private:
   unsigned     bitrate;
   kpi_counter& corrupt_packet_counter;
   kpi_counter& tx_dummy_packet_counter;
+
+  // file used to log received sequence ids for debugging
+  std::ofstream seq_log_file;
+  // cache latest 128 received sequence ids for quick inspection on loss
+  std::array<uint16_t, 128> seq_cache{};
+  // next write index into seq_cache (wraps at 128)
+  size_t seq_cache_index = 0;
+  // number of valid entries currently in seq_cache (<=128)
+  size_t seq_cache_count = 0;
 
   bool open_video_tunnel_in();
   bool open_video_tunnel_out();
