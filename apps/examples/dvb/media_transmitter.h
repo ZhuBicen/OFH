@@ -102,6 +102,9 @@ private:
 
   void push_packet_to_send_queue(srsran::Packet packet);
 
+  // helper for printing the seq cache
+  void log_cached_seq_ids(const std::string &prefix);
+
   srsran::Packet       dummy_ethernet_frame;
   uint16_t             ether_head_size = 0;
   uint64_t             delay_per_packet_in_nano_seconds;
