@@ -8,6 +8,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <memory>
 #include <sys/stat.h>
@@ -122,7 +123,9 @@ unsigned int map_sequence_to_size(unsigned int n, size_t mtu, bool variable_mtu)
   if (!variable_mtu) {
     return mtu;
   }
-  return 64 + (n % (mtu - 64 + 1));
+  static std::mt19937 gen(std::random_device{}());
+  std::uniform_int_distribution<unsigned int> dist(64, static_cast<unsigned int>(mtu));
+  return dist(gen);
 }
 
 void MediaTransmitter::create_dummy_ethernet_frame(uint16_t seq)
@@ -249,7 +252,7 @@ size_t MediaTransmitter::push_dummy_packet()
   auto p = std::make_shared<std::vector<uint8_t>>(*dummy_ethernet_frame.get());
   fill_dummy_packet_seq({p->data(), p->size()}, seq);
   sequence_id = (sequence_id + 1) % UINT16_MAX;
-  fill_crc({p->data(), p->size()}, true);
+  fill_crc({p->data(), p->size()}, false);
   push_packet_to_send_queue(p);
   return p->size();
 }
