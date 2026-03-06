@@ -308,24 +308,17 @@ void MediaTransmitter::generate_media()
     eth_builder->build_frame({packet->data(), packet->size()});
 
     if (auto h = fill_media(packet, false, 0); h) {
-      // if (h->length < 38) {
-      //   h->length = 38;
-      // }
-      // packet->resize(ether_head_size + sizeof(SYNC_HEAD) + sizeof(Header::length) + h->length + sizeof(uint16_t),
-      //                false);
-      // h->sequence = sequence_id;
-      // sequence_id = (sequence_id + 1) % UINT16_MAX;
-      // fill_header(packet, *h);
-      // fill_crc({packet->data(), packet->size()}, false);
-      // if (save_first_video_packet) {
-      //   save_to_binary_file(packet->data(), packet->size(), "first_send_packet.bin");
-      //   save_first_video_packet = false;
-      // }
-      // push_packet_to_send_queue(packet);
-      // tx_video_packet_counter.increment();
-      for (uint16_t i = 0; i < 1; ++i) {
-        push_dummy_packet();
+      if (h->length < 38) {
+        h->length = 38;
       }
+      packet->resize(ether_head_size + sizeof(SYNC_HEAD) + sizeof(Header::length) + h->length + sizeof(uint16_t),
+                     false);
+      h->sequence = sequence_id;
+      sequence_id = (sequence_id + 1) % UINT16_MAX;
+      fill_header(packet, *h);
+      fill_crc({packet->data(), packet->size()}, false);
+      push_packet_to_send_queue(packet);
+
     }
   }
 }
