@@ -314,7 +314,7 @@ public:
       lantency = (double)lantencies.get_value() / rx_total;
     }
 
-    if (!rx_total && tx_total) {
+    if (seconds >= 1 && !rx_total && tx_total) {
       logger.error("No valid packets received, but {} packets transmitted!", tx_total);
     }
 
