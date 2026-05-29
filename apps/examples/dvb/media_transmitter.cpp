@@ -93,6 +93,8 @@ bool save_to_binary_file(const void* data_address, std::size_t data_length, cons
 
 uint32_t SYNC_HEAD = 0x1ACFFC1D;
 
+static struct Header headerToNetworkByte(const struct Header& header);
+
 std::array<uint16_t, UINT16_MAX> g_dummy_packets_crc;
 
 static uint16_t get_crc(const span<const uint8_t>& payload, uint16_t seq, bool dummy = false)
@@ -246,13 +248,33 @@ void MediaTransmitter::fill_dummy_packet_seq(span<uint8_t> payload, uint16_t seq
 size_t MediaTransmitter::push_dummy_packet()
 {
   tx_dummy_packet_counter.increment();
-  int seq = sequence_id;
-
-  create_dummy_ethernet_frame(seq);
-  auto p = std::make_shared<std::vector<uint8_t>>(*dummy_ethernet_frame.get());
-  fill_dummy_packet_seq({p->data(), p->size()}, seq);
+  uint16_t seq = sequence_id;
   sequence_id = (sequence_id + 1) % UINT16_MAX;
+
+  const size_t frame_size = variable_mtu ? map_sequence_to_size(seq, mtu_size, true) : mtu_size;
+
+  // Single allocation — build directly into the packet that goes to the queue
+  auto p = std::make_shared<std::vector<uint8_t>>(frame_size, 0);
+
+  // Build ethernet header
+  eth_builder->build_frame({p->data(), p->size()});
+
+  // Fill media payload with dummy data
+  const size_t media_size = frame_size - ether_head_size - sizeof(Header) - CRC_LENGTH;
+  fill_dummy_payload(p->data() + ether_head_size + sizeof(Header), media_size, seq);
+
+  // Write custom header (network byte order)
+  struct Header header;
+  header.sync_header  = SYNC_HEAD;
+  header.length       = sizeof(Header::sequence) + sizeof(Header::media_length) + media_size;
+  header.sequence     = seq;
+  header.media_length = 0;
+  auto net_header     = headerToNetworkByte(header);
+  memcpy(p->data() + ether_head_size, &net_header, sizeof(net_header));
+
+  // Compute and write CRC
   fill_crc({p->data(), p->size()}, false);
+
   push_packet_to_send_queue(p);
   return p->size();
 }

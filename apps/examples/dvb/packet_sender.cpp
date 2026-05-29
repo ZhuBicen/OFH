@@ -47,7 +47,7 @@ void PacketSender::send_loop()
 {
   static bool save_first_send_frame = true;
   while (true) {
-    static_vector<span<const uint8_t>, 1> frame_burst;
+    static_vector<span<const uint8_t>, 2> frame_burst;
     std::vector<Packet>                   cache_packets;
     for (size_t i = 0; i < packets.size(); i++) {
       Packet packet;
@@ -65,10 +65,16 @@ void PacketSender::send_loop()
       //     "Sending packet with seq={} size={} at time {}", seq, packet->size(),
       //     send_time.time_since_epoch().count());
       send_nano_seconds[seq] = send_time;
+      if (frame_burst.size() >= 2) {
+        transceiver.send(frame_burst);
+        frame_burst.clear();
+      }
+      if (packet_delay_in_nano_seconds > 0) {
+        std::this_thread::sleep_for(std::chrono::nanoseconds(packet_delay_in_nano_seconds));
+      }
+    }
+    if (!frame_burst.empty()) {
       transceiver.send(frame_burst);
-      frame_burst.clear();
-
-      std::this_thread::sleep_for(std::chrono::nanoseconds(packet_delay_in_nano_seconds));
     }
   }
 }
