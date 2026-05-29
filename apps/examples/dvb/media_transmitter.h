@@ -44,7 +44,7 @@ public:
                    const std::string&     output_stream,
                    srsran::PacketQueue&   packet_queue_,
                    srsran::task_executor& executor,
-                   uint16_t               speed_factor,
+                   bool                   enable_check_crc,
                    unsigned               initial_num_of_packet,
                    uint16_t               mtu_size,
                    bool                   vairable_mtu,
@@ -73,7 +73,7 @@ private:
   uint16_t                sequence_id = 0;
   std::optional<uint16_t> last_received_sequence_id;
 
-  uint16_t     speed_factor;
+  bool         enable_check_crc;
   unsigned     initial_num_of_packet;
   uint16_t     mtu_size;
   bool         variable_mtu;

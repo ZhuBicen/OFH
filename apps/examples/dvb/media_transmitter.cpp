@@ -1,6 +1,6 @@
 #include "media_transmitter.h"
 
-#include "crc16.h"
+#include "crc32.h"
 
 #include <arpa/inet.h>
 #include <array>
@@ -100,10 +100,10 @@ static uint16_t get_crc(const span<const uint8_t>& payload, uint16_t seq, bool d
   if (dummy) {
     return g_dummy_packets_crc[seq];
   }
-  return crc16_4bytes_optimized(payload.data(), payload.size(), 0);
+  return crc32_hw(payload.data(), payload.size(), 0xFFFFFFFF);
 }
 
-static void fill_dummy_payload(uint8_t* payload, size_t size, uint16_t content)
+static void fill_dummy_payload(uint8_t *payload, size_t size, uint16_t content)
 {
   if (content == 0) {
     content = 0xFFFF;
@@ -161,7 +161,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
                                    const std::string&     output_stream,
                                    srsran::PacketQueue&   packet_queue_,
                                    srsran::task_executor& executor_,
-                                   uint16_t               speed_factor_,
+                                   bool                   enable_check_crc_,
                                    unsigned               initial_num_of_packet_,
                                    uint16_t               mtu_size_,
                                    bool                   variable_mtu_,
@@ -176,7 +176,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   video_tunnel_in(-1),
   video_tunnel_out(-1),
   logger(logger_),
-  speed_factor(speed_factor_),
+  enable_check_crc(enable_check_crc_),
   initial_num_of_packet(initial_num_of_packet_),
   mtu_size(mtu_size_),
   variable_mtu(variable_mtu_),
@@ -195,10 +195,10 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
     logger.info("Failed to open video out tunnels, please start fifo_to_tcp program");
   }
   logger.info(
-      "MediaTransmitter initialized with input: {}, output: {}, speed factor: {}, initial packets: {}, mtu_size: {}",
+      "MediaTransmitter initialized with input: {}, output: {}, enable crc check?: {}, initial packets: {}, mtu_size: {}",
       input_stream_file_name,
       output_stream_file_name,
-      speed_factor,
+      enable_check_crc,
       initial_num_of_packet,
       mtu_size);
 }
@@ -293,7 +293,7 @@ void MediaTransmitter::generate_media()
       total_bits_sent += (push_dummy_packet() * 8);
       i++;
     } else {
-      std::this_thread::sleep_for(std::chrono::nanoseconds(10));
+      // std::this_thread::sleep_for(std::chrono::nanoseconds(10));
       // precise_sleep_ns(100);
     }
   }
@@ -410,21 +410,23 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
     return PayloadCheckResult::INVALID_LENGTH;
   }
 
-  uint16_t expected_crc = htons(get_crc(
-      {payload.data() + sizeof(SYNC_HEAD), span<uint8_t>::size_type(header.length + 2)}, header.sequence, false));
-  uint16_t received_crc = *(const uint16_t*)(payload.data() + payload.size() - 2);
-  if (received_crc != expected_crc) {
-    logger.error("Sequence {}, crc 0x{:04X}, expected crc 0x{:04X}, indicating a possible corruption",
-                 seq_id,
-                 received_crc,
-                 expected_crc);
-    corrupt_packet_counter.increment();
-    if (invalid_crc_num < 3) {
-      save_to_binary_file(payload.data(), payload.size(), "invalid_crc_seq_" + std::to_string(seq_id) + ".bin");
-      invalid_crc_num++;
+  if (enable_check_crc) {
+    uint16_t expected_crc = htons(get_crc(
+        {payload.data() + sizeof(SYNC_HEAD), span<uint8_t>::size_type(header.length + 2)}, header.sequence, false));
+    uint16_t received_crc = *(const uint16_t*)(payload.data() + payload.size() - 2);
+    if (received_crc != expected_crc) {
+      logger.error("Sequence {}, crc 0x{:04X}, expected crc 0x{:04X}, indicating a possible corruption",
+                  seq_id,
+                  received_crc,
+                  expected_crc);
+      corrupt_packet_counter.increment();
+      if (invalid_crc_num < 3) {
+        save_to_binary_file(payload.data(), payload.size(), "invalid_crc_seq_" + std::to_string(seq_id) + ".bin");
+        invalid_crc_num++;
+      }
+      log_cached_seq_ids("Cached seq ids before crc failure: ");
+      return PayloadCheckResult::INVALID_CRC;
     }
-    log_cached_seq_ids("Cached seq ids before crc failure: ");
-    return PayloadCheckResult::INVALID_CRC;
   }
 
   std::vector<uint8_t> data(payload.data() + sizeof(Header), payload.data() + sizeof(Header) + header.media_length);
@@ -480,15 +482,15 @@ bool MediaTransmitter::open_video_tunnel_in()
 
 void MediaTransmitter::log_cached_seq_ids(const std::string &prefix)
 {
-  std::ostringstream oss;
-  oss << prefix;
-  size_t start = (seq_cache_index + 128 - seq_cache_count) & 0x7F;
-  for (size_t i = 0; i < seq_cache_count; ++i) {
-    size_t idx = (start + i) & 0x7F;
-    if (i) oss << ",";
-    oss << seq_cache[idx];
-  }
-  logger.warning("{}", oss.str());
+  // std::ostringstream oss;
+  // oss << prefix;
+  // size_t start = (seq_cache_index + 128 - seq_cache_count) & 0x7F;
+  // for (size_t i = 0; i < seq_cache_count; ++i) {
+  //   size_t idx = (start + i) & 0x7F;
+  //   if (i) oss << ",";
+  //   oss << seq_cache[idx];
+  // }
+  // logger.warning("{}", oss.str());
 }
 
 

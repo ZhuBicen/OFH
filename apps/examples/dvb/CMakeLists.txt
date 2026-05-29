@@ -27,11 +27,13 @@ set (SOURCES
         media_transmitter.cpp
         packet_sender.cpp
         packet_receiver.cpp
-        crc16.cpp
+        crc32.cpp
         dvb_tx_sim.cpp)
 if (DPDK_FOUND)
     list(APPEND SOURCES dvb_tx_sim_dpdk_transceiver.cpp)
 endif (DPDK_FOUND)
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(dvb_tx_sim ${SOURCES})
 target_include_directories(dvb_tx_sim PRIVATE ${CMAKE_SOURCE_DIR})

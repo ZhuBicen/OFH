@@ -73,15 +73,14 @@ static void configure_cli11_dvb_tx_sim_args(CLI::App& app, dvb_tx_sim_ofh_appcon
   app.add_option("--enable_promiscuous", config.enable_promiscuous, "Promiscuous mode flag")->capture_default_str();
   app.add_option("--input_file", config.input_file, "input stream file")->capture_default_str();
   app.add_option("--output_file", config.output_file, "output stream file")->capture_default_str();
-  app.add_option("--speed_factor", config.speed_factor, "Speed factor for the media transmitter")
-      ->capture_default_str()
-      ->check(CLI::Range(1, 10000));
+  app.add_option("--enable_check_crc", config.enable_check_crc, "Enable crc check or not")
+      ->capture_default_str();
   app.add_option("--initial_num_of_packet", config.initial_num_of_packet, "packet num to be sent before ffmpeg started")
       ->capture_default_str()
       ->check(CLI::Range(0, 100'000'000));
   app.add_option("--packet_delay_in_nano_seconds", config.packet_delay_in_nano_seconds, "packet delay in nanosec")
       ->capture_default_str()
-      ->check(CLI::Range(1, 20000));
+      ->check(CLI::Range(0, 20000));
   app.add_option("--variable_mtu", config.variable_mtu, "mtu size up and down between 64 and 2048")
       ->capture_default_str();
   app.add_option("--bitrate", config.bitrate, "Bitrate in Mbps")->capture_default_str()->check(CLI::Range(1, 50000));

@@ -118,7 +118,7 @@ struct dvb_tx_sim_config {
 
   unsigned mtu;
 
-  unsigned    speed_factor;
+  bool        enable_check_crc;
   unsigned    initial_num_of_packet;
   unsigned    packet_delay_in_nano_seconds;
   bool        variable_mtu;
@@ -141,6 +141,7 @@ class dvb_tx_sim : public frame_notifier
   dvb_tx_sim_transceiver& transceiver;
   task_executor&          save_executor;
 
+  bool   check_mac;
   // Timing window checkers, store statistics of early/late/on-time packets.
   // RU emulator configuration.
   const dvb_tx_sim_config cfg;
@@ -175,12 +176,14 @@ public:
              task_executor&          prepare_executor_,
              dvb_tx_sim_transceiver& transceiver_,
              task_executor&          save_executor_,
+             bool& check_mac_,
              dvb_tx_sim_config       cfg_) :
     logger(logger_),
     tx_executor(tx_executor_),
     prepare_executor(prepare_executor_),
     transceiver(transceiver_),
     save_executor(save_executor_),
+    check_mac(check_mac_),
     cfg(cfg_),
     input_stream_file_name(cfg_.input_file),
     output_stream_file_name(cfg_.output_file),
@@ -192,7 +195,7 @@ public:
                       output_stream_file_name,
                       packet_queue,
                       prepare_executor_,
-                      cfg_.speed_factor,
+                      cfg_.enable_check_crc,
                       cfg_.initial_num_of_packet,
                       cfg_.mtu,
                       cfg_.variable_mtu,
@@ -230,9 +233,9 @@ public:
           span<const uint8_t> frame = b.data().subspan(ether_header_size, b.data().size() - ether_header_size);
 
           auto mac_address = b.data().subspan(ETH_ADDR_LEN, ether::ETH_ADDR_LEN);
-          if (mac_address[0] != cfg.dst_mac[0] || mac_address[1] != cfg.dst_mac[1] ||
+          if (check_mac && (mac_address[0] != cfg.dst_mac[0] || mac_address[1] != cfg.dst_mac[1] ||
               mac_address[2] != cfg.dst_mac[2] || mac_address[3] != cfg.dst_mac[3] ||
-              mac_address[4] != cfg.dst_mac[4] || mac_address[5] != cfg.dst_mac[5]) {
+              mac_address[4] != cfg.dst_mac[4] || mac_address[5] != cfg.dst_mac[5])) {
             dropped_counter.increment();
             if (save_droped_frame < 10) {
               save_to_binary_file(
@@ -384,8 +387,8 @@ struct worker_manager {
 
     // Packet sender executor.
     {
-      const std::string name      = "dvb_packet_sender";
-      const std::string exec_name = "dvb_packet_sender_exec";
+      const std::string name      = "packet_sender";
+      const std::string exec_name = "packet_sender_exec";
 
       const single_worker dvb_worker{name,
                                      {concurrent_queue_policy::lockfree_spsc, 4},
@@ -400,8 +403,8 @@ struct worker_manager {
 
     // Packet prepare executor.
     {
-      const std::string name      = "dvb_packet_prepare";
-      const std::string exec_name = "dvb_packet_prepare_exec";
+      const std::string name      = "packet_prepare";
+      const std::string exec_name = "packet_prepare_exec";
 
       const single_worker dvb_worker{name,
                                      {concurrent_queue_policy::lockfree_spsc, 4},
@@ -539,6 +542,7 @@ int main(int argc, char** argv)
     if (!parse_mac_address(dvb_tx_sim_cfg.dst_mac_address, cfg.mac_dst_address)) {
       report_error("Invalid MAC address provided: '{}'", dvb_tx_sim_cfg.dst_mac_address);
     }
+    logger.info("Using socket transceiver");
     transceivers.push_back(std::make_unique<socket_transceiver>(logger, *workers.dvb_rx_exec, cfg));
   }
 
@@ -547,7 +551,7 @@ int main(int argc, char** argv)
   emu_cfg.nof_prb                      = MAX_DVB_FRAME_SIZE / 4;
   emu_cfg.input_file                   = dvb_tx_sim_cfg.input_file;
   emu_cfg.output_file                  = dvb_tx_sim_cfg.output_file;
-  emu_cfg.speed_factor                 = dvb_tx_sim_cfg.speed_factor;
+  emu_cfg.enable_check_crc             = dvb_tx_sim_cfg.enable_check_crc;
   emu_cfg.initial_num_of_packet        = dvb_tx_sim_cfg.initial_num_of_packet;
   emu_cfg.packet_delay_in_nano_seconds = dvb_tx_sim_cfg.packet_delay_in_nano_seconds;
   emu_cfg.bitrate                      = dvb_tx_sim_cfg.bitrate;
@@ -591,6 +595,7 @@ int main(int argc, char** argv)
                                                      *workers.packet_prepare_exec,
                                                      *transceivers[0],
                                                      *workers.dvb_save_frame_exec,
+                                                     uses_dpdk,
                                                      emu_cfg));
 
   for (auto& dvb : dvb_tx_sims) {

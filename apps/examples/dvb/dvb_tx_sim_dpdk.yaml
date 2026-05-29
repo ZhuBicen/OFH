@@ -7,7 +7,7 @@ dvb_tx_sim:
      #- network_interface: enp101s0f1np1        # Use BDF instead of interface name for DPDK
     - network_interface: 0000:01:10.1        # Use BDF instead of interface name for DPDK
       src_mac_addr: 00:11:22:33:44:67          # MAC address of the RU
-      dst_mac_addr: 77:88:99:aa:bb:cc          # MAC address of the DU
+      dst_mac_addr: 76:88:99:aa:bb:cc          # MAC address of the DU
       enable_promiscuous: true               # Promiscuous mode flag
       mtu: 2048
       variable_mtu: false
@@ -18,9 +18,9 @@ dvb_tx_sim:
       # frame_period: 3320832
       input_file: /tmp/input_stream
       output_file: /tmp/output_stream
-      speed_factor: 1000                     # Speed factor for simulation
+      enable_check_crc: true                     # Speed factor for simulation
       initial_num_of_packet: 0            # Initial number of packets to send
-      packet_delay_in_nano_seconds: 2000     # Delay between packets in nanoseconds
-      bitrate: 500                     # Mbps
+      packet_delay_in_nano_seconds: 1000     # Delay between packets in nanoseconds
+      bitrate: 2581                     # Mbps
 dpdk:
    eal_args: "--lcores (0-3)@(0-10) --proc-type=auto"
