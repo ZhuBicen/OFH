@@ -1,4 +1,5 @@
 #include "packet_receiver.h"
+
 #include <iostream>
 
 using namespace srsran;
@@ -43,7 +44,14 @@ static bool isImmediatePredecessor(uint16_t expected, uint16_t current) {
   return current == expected - 1;
 }
 
-std::vector<RxPacket> PacketReceiver::get_sorted_packets(bool& is_packet_loss_detected)
+uint16_t min_sequence_gap(uint16_t id1, uint16_t id2) {
+  uint16_t forward = (id1 <= id2) ? (id2 - id1) : (id1 - id2);
+  uint16_t backward = UINT16_MAX - forward;
+  return std::min(forward, backward);
+}
+
+
+std::vector<RxPacket> PacketReceiver::get_sorted_packets(bool& is_packet_loss_detected, kpi_counter& lost_packet_counter)
 {
   std::vector<RxPacket> sorted_packets;
 
@@ -67,6 +75,7 @@ std::vector<RxPacket> PacketReceiver::get_sorted_packets(bool& is_packet_loss_de
       is_packet_loss_detected = true;
       logger.error(
           "Detected packet loss: seq [{}, {}), buffered={}", expected_seq, top.sequence_number, packet_queue.size());
+      lost_packet_counter.increment(min_sequence_gap(expected_seq, top.sequence_number));
       expected_seq = top.sequence_number;
       sorted_packets.push_back(std::move(top));
       packet_queue.pop();

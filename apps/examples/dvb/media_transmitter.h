@@ -50,7 +50,8 @@ public:
                    bool                   vairable_mtu,
                    unsigned               bitrate,
                    kpi_counter&           corrupt_packet_counter_,
-                   kpi_counter&           tx_dummy_packet_counter_);
+                   kpi_counter&           tx_dummy_packet_counter_,
+                  kpi_counter& lost_counter_);
   void set_eth_builder(srsran::ether::frame_builder* eth_builder_);
   ~MediaTransmitter();
   void start();
@@ -80,6 +81,7 @@ private:
   unsigned     bitrate;
   kpi_counter& corrupt_packet_counter;
   kpi_counter& tx_dummy_packet_counter;
+  kpi_counter& lost_packet_counter;
 
   // file used to log received sequence ids for debugging
   std::ofstream seq_log_file;

@@ -169,7 +169,8 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
                                    bool                   variable_mtu_,
                                    unsigned               bitrate_,
                                    kpi_counter&           corrupt_packet_counter_,
-                                   kpi_counter&           tx_dummy_packet_counter_) :
+                                   kpi_counter&           tx_dummy_packet_counter_,
+                                   kpi_counter&           lost_packet_counter_) :
   packet_receiver(logger_),
   packet_queue(packet_queue_),
   executor(executor_),
@@ -185,6 +186,7 @@ MediaTransmitter::MediaTransmitter(srslog::basic_logger&  logger_,
   bitrate(bitrate_),
   corrupt_packet_counter(corrupt_packet_counter_),
   tx_dummy_packet_counter(tx_dummy_packet_counter_),
+  lost_packet_counter(lost_packet_counter_),
   delay_per_packet_in_nano_seconds((1000000000ULL * 8 * mtu_size_ / (bitrate_ * 1000000ULL)))
 {
   // do not persist all sequence ids to a big binary file anymore;
@@ -461,7 +463,7 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
     ++seq_cache_count;
   }
   bool is_packet_loss_detected = false;
-  const auto& sorted_packets = packet_receiver.get_sorted_packets(is_packet_loss_detected);
+  const auto& sorted_packets = packet_receiver.get_sorted_packets(is_packet_loss_detected, lost_packet_counter);
   if (is_packet_loss_detected) {
     log_cached_seq_ids("Packet loss detected when processing sequence " + std::to_string(seq_id) + ", last "
                        + std::to_string(seq_cache_count) + " seq ids: ");

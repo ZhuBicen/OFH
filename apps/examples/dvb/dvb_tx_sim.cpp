@@ -154,6 +154,7 @@ class dvb_tx_sim : public frame_notifier
   kpi_counter                           tx_total_counter;
   kpi_counter                           tx_bytes;
   kpi_counter                           corrupt_counter;
+  kpi_counter lost_counter;
   kpi_counter                           dropped_counter;
   kpi_counter                           lantencies;
   std::unique_ptr<ether::frame_builder> eth_builder;
@@ -201,7 +202,8 @@ public:
                       cfg_.variable_mtu,
                       cfg_.bitrate,
                       corrupt_counter,
-                      tx_total_counter),
+                      tx_total_counter, 
+                      lost_counter),
     packet_sender(logger_, tx_executor, transceiver_, packet_queue, tx_bytes, cfg_.packet_delay_in_nano_seconds)
   {
     seq_counters.insert(0, 0);
@@ -309,6 +311,7 @@ public:
     std::tm  current_time   = fmt::gmtime(std::chrono::system_clock::to_time_t(now));
     uint64_t rx_total       = rx_total_counter.get_value();
     uint64_t malformed      = corrupt_counter.get_value();
+    uint64_t lost           = lost_counter.get_value();
     uint64_t tx_total       = tx_total_counter.get_value();
     uint64_t tx_bytes_total = tx_bytes.get_value();
     double   lantency       = 0;
@@ -322,10 +325,11 @@ public:
     }
 
     fmt::format_to(buffer,
-                   "| {:%H:%M:%S} | {:^11} | {:^11} | {:^11} | {:^16} | {:^10.2f} | {:^10} | {:^10} | \n",
+                   "| {:%H:%M:%S} | {:^11} | {:^11} | {:^11} | {:^11} | {:^16} | {:^10.2f} | {:^10} | {:^10} | \n",
                    current_time,
                    rx_total,
                    tx_total,
+                   lost,
                    malformed,
                    seconds != 0 ? formatDataSpeed((double)tx_bytes_total * 8 / seconds) : "N/A",
                    lantency,
@@ -603,10 +607,11 @@ int main(int argc, char** argv)
   }
   fmt::print("Running. Waiting for incoming packets...\n");
 
-  fmt::print("> | {:^8} | {:^11} | {:^11} | {:^11} | {:^16} | {:^10} | {:^10} | {:^10} |\n",
+  fmt::print("> | {:^8} | {:^11} | {:^11} | {:^11} | {:^11} | {:^16} | {:^10} | {:^10} | {:^10} |\n",
              "TIME",
              "RX",
              "TX",
+             "Lost",
              "Corrupt",
              "Bitrate",
              "Avg(us)",
