@@ -325,7 +325,7 @@ public:
     }
 
     fmt::format_to(buffer,
-                   "| {:%H:%M:%S} | {:^11} | {:^11} | {:^11} | {:^11} | {:^16} | {:^10.2f} | {:^10} | {:^10} | \n",
+                   "| {:%H:%M:%S} | {:^11} | {:^11} | {:^11} | {:^11} | {:^16} | {:^10.2f} | {:^10} | {:^10} |",
                    current_time,
                    rx_total,
                    tx_total,
@@ -338,8 +338,12 @@ public:
 
     max_latency = 0;
     min_latency = std::numeric_limits<int64_t>::max();
-
-    fmt::print(to_c_str(buffer));
+    
+    if (lost > 0 || malformed > 0) {
+      fmt::print("\033[41m{}\033[0m\n", to_c_str(buffer));
+    } else {
+      fmt::print("{}\n", to_c_str(buffer));
+    }
   }
 
   void save_frame() { need_save_frame = true; }
