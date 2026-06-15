@@ -1,7 +1,7 @@
 #pragma once
+#include "kpi_counter.h"
 #include "srsran/ofh/ethernet/ethernet_unique_buffer.h"
 #include "srsran/srslog/logger.h"
-#include "kpi_counter.h"
 
 #include <chrono>
 #include <queue>
@@ -30,7 +30,7 @@ class PacketReceiver
 private:
   std::priority_queue<RxPacket>              packet_queue;
   uint16_t                                   expected_seq;
-  static constexpr int                       MAX_GAP = 64;
+  static constexpr int                       MAX_GAP = 1024;
   static constexpr std::chrono::milliseconds TIMEOUT{200000000};
   std::chrono::steady_clock::time_point      last_packet_time;
   bool                                       is_seq_greater(uint16_t seq1, uint16_t seq2) const;
