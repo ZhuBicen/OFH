@@ -45,12 +45,9 @@ bool save_to_binary_file(const void* data_address, std::size_t data_length, cons
 
 void PacketSender::send_loop()
 {
-  using namespace std::chrono;
-
   static bool save_first_send_frame = true;
-  static const uint16_t burst_size = 16;
   while (true) {
-    static_vector<span<const uint8_t>, burst_size> frame_burst;
+    static_vector<span<const uint8_t>, 2> frame_burst;
     std::vector<Packet>                   cache_packets;
     for (size_t i = 0; i < packets.size(); i++) {
       Packet packet;
@@ -68,19 +65,12 @@ void PacketSender::send_loop()
       //     "Sending packet with seq={} size={} at time {}", seq, packet->size(),
       //     send_time.time_since_epoch().count());
       send_nano_seconds[seq] = send_time;
-      if (frame_burst.size() >= burst_size) {
+      if (frame_burst.size() >= 2) {
         transceiver.send(frame_burst);
         frame_burst.clear();
       }
       if (packet_delay_in_nano_seconds > 0) {
-        auto     start_time      = std::chrono::steady_clock::now();
-        for (;;) {
-          auto now = std::chrono::steady_clock::now();
-          auto elapsed = duration_cast<nanoseconds>(now - start_time).count();
-          if (elapsed >= packet_delay_in_nano_seconds) {
-            break;
-          }
-        }
+        std::this_thread::sleep_for(std::chrono::nanoseconds(packet_delay_in_nano_seconds));
       }
     }
     if (!frame_burst.empty()) {
