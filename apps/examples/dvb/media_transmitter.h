@@ -83,14 +83,6 @@ private:
   kpi_counter& tx_dummy_packet_counter;
   kpi_counter& lost_packet_counter;
 
-  // file used to log received sequence ids for debugging
-  std::ofstream seq_log_file;
-  // cache latest 128 received sequence ids for quick inspection on loss
-  std::array<uint16_t, 128> seq_cache{};
-  // next write index into seq_cache (wraps at 128)
-  size_t seq_cache_index = 0;
-  // number of valid entries currently in seq_cache (<=128)
-  size_t seq_cache_count = 0;
 
   bool open_video_tunnel_in();
   bool open_video_tunnel_out();
@@ -103,9 +95,6 @@ private:
   size_t push_dummy_packet();
 
   void push_packet_to_send_queue(srsran::Packet packet);
-
-  // helper for printing the seq cache
-  void log_cached_seq_ids(const std::string &prefix);
 
   srsran::Packet       dummy_ethernet_frame;
   uint16_t             ether_head_size = 0;

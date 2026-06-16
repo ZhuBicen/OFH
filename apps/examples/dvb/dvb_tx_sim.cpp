@@ -46,6 +46,7 @@
 #include "srsran/support/executors/task_executor.h"
 #include "srsran/support/format_utils.h"
 #include "srsran/support/signal_handling.h"
+#include "rte_ethdev.h"
 
 #include "fmt/chrono.h"
 #include <arpa/inet.h>
@@ -159,6 +160,7 @@ class dvb_tx_sim : public frame_notifier
   kpi_counter                           lantencies;
   std::unique_ptr<ether::frame_builder> eth_builder;
   unsigned                              nof_per_symbol;
+  uint64_t nof_raw_received_packets = 0;
 
   int64_t min_latency = std::numeric_limits<int64_t>::max();
   int64_t max_latency = 0;
@@ -229,6 +231,7 @@ public:
     static unsigned save_received_frame = 0;
     static unsigned counter             = 0;
     static unsigned save_droped_frame   = 0;
+    nof_raw_received_packets++;
     auto recv_time = std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::system_clock::now());
     if (!save_executor.defer([this, b = std::move(buffer), recv_time] {
           size_t              ether_header_size = eth_builder->get_header_size().value();
@@ -325,7 +328,7 @@ public:
     }
 
     fmt::format_to(buffer,
-                   "| {:%H:%M:%S} | {:^11} | {:^11} | {:^11} | {:^11} | {:^16} | {:^10.2f} | {:^10} | {:^10} |",
+                   "| {:%H:%M:%S} | {:^11} | {:^11} | {:^11} | {:^11} | {:^16} | {:^10.2f} | {:^10} | {:^10} | {:^10} ",
                    current_time,
                    rx_total,
                    tx_total,
@@ -334,7 +337,8 @@ public:
                    seconds != 0 ? formatDataSpeed((double)tx_bytes_total * 8 / seconds) : "N/A",
                    lantency,
                    min_latency == std::numeric_limits<int64_t>::max() ? "N/A" : std::to_string(min_latency),
-                   max_latency);
+                   max_latency,
+                   nof_raw_received_packets);
 
     max_latency = 0;
     min_latency = std::numeric_limits<int64_t>::max();
@@ -533,12 +537,13 @@ int main(int argc, char** argv)
   dvb_tx_sim_ofh_appconfig dvb_tx_sim_cfg = dvb_tx_sim_parsed_cfg.dvb_tx_sim_cfg;
 
 #ifdef DPDK_FOUND
+  std::shared_ptr<dpdk_port_context> ctx;
   if (uses_dpdk) {
     dpdk_port_config port_cfg;
     port_cfg.pcie_id                     = dvb_tx_sim_cfg.network_interface;
     port_cfg.mtu_size                    = units::bytes{dvb_tx_sim_cfg.mtu};
     port_cfg.is_promiscuous_mode_enabled = dvb_tx_sim_cfg.enable_promiscuous;
-    auto ctx                             = dpdk_port_context::create(port_cfg);
+    ctx                             = dpdk_port_context::create(port_cfg);
     transceivers.push_back(std::make_unique<dpdk_transceiver>(logger, *workers.dvb_rx_exec, ctx));
   } else
 #endif
@@ -590,6 +595,7 @@ int main(int argc, char** argv)
   logger.info("input video tunnel {}", dvb_tx_sim_cfg.input_file);
   logger.info("output video tunnel {}", dvb_tx_sim_cfg.output_file);
   logger.info("------------------------------------------");
+  logger.info("version: 1");
   logger.info("variable mtu? {}", emu_cfg.variable_mtu);
   logger.info("initial_num_of_packet {}", emu_cfg.initial_num_of_packet);
   logger.info("packet_delay_in_nano_seconds {}", emu_cfg.packet_delay_in_nano_seconds);
@@ -622,6 +628,8 @@ int main(int argc, char** argv)
              "Min(us)",
              "Max(us)");
   std::string input;
+  struct rte_eth_stats dpdk_stats;
+
   while (is_app_running) {
     std::cout << "> ";
     getline(std::cin, input);
@@ -631,9 +639,32 @@ int main(int argc, char** argv)
     } else {
       for (unsigned i = 0, e = dvb_tx_sims.size(); i != e; ++i) {
         dvb_tx_sims[i]->print_statistics(i);
+        if (ctx) {
+          memset(&dpdk_stats, 0, sizeof(dpdk_stats));
+          rte_eth_stats_get(ctx->get_port_id(), &dpdk_stats);
+          fmt::print("dpdk rx num: {} tx num: {}\n", dpdk_stats.ipackets, dpdk_stats.opackets);
+          if (dpdk_stats.ierrors != 0 || dpdk_stats.imissed != 0 || dpdk_stats.rx_nombuf != 0) {
+            fmt::print("dpdk error {} {} {} \n", dpdk_stats.ierrors, dpdk_stats.imissed, dpdk_stats.rx_nombuf);
+          }
+          int len = rte_eth_xstats_get(ctx->get_port_id(), NULL, 0);
+          if (len > 0) {
+              std::vector<struct rte_eth_xstat> xstats(len);
+              std::vector<struct rte_eth_xstat_name> xstats_names(len);
+              rte_eth_xstats_get_names(ctx->get_port_id(), xstats_names.data(), len);
+              rte_eth_xstats_get(ctx->get_port_id(), xstats.data(), len);
+              
+              for (int j = 0; j < len; j++) {
+                  if (xstats[j].value > 0) {
+                      fmt::print("{}: {}\n", xstats_names[j].name, xstats[j].value);
+                  }
+              }
+          }
+        }
       }
     }
   }
+
+
 
   // timing_notifier.stop();
   for (auto& txrx : transceivers) {

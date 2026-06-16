@@ -77,7 +77,7 @@ static void configure_cli11_dvb_tx_sim_args(CLI::App& app, dvb_tx_sim_ofh_appcon
       ->capture_default_str();
   app.add_option("--initial_num_of_packet", config.initial_num_of_packet, "packet num to be sent before ffmpeg started")
       ->capture_default_str()
-      ->check(CLI::Range(0, 100'000'000));
+      ->check(CLI::Range(0, 900'000'000));
   app.add_option("--packet_delay_in_nano_seconds", config.packet_delay_in_nano_seconds, "packet delay in nanosec")
       ->capture_default_str()
       ->check(CLI::Range(0, 20000));

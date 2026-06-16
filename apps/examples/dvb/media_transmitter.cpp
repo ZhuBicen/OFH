@@ -309,7 +309,7 @@ void MediaTransmitter::generate_media()
   auto     start_time      = steady_clock::now();
   uint64_t total_bits_sent = 0;
   // static bool save_first_video_packet = true;
-  for (unsigned i = 0; i < initial_num_of_packet || initial_num_of_packet == 0;) {
+  for (unsigned i = 1; i <= initial_num_of_packet || initial_num_of_packet == 0;) {
     auto     now              = steady_clock::now();
     auto     elapsed          = duration_cast<microseconds>(now - start_time).count();
     uint64_t should_have_sent = (bitrate * elapsed);
@@ -448,7 +448,6 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
         save_to_binary_file(payload.data(), payload.size(), "invalid_crc_seq_" + std::to_string(seq_id) + ".bin");
         invalid_crc_num++;
       }
-      log_cached_seq_ids("Cached seq ids before crc failure: ");
       return PayloadCheckResult::INVALID_CRC;
     }
   }
@@ -456,18 +455,9 @@ PayloadCheckResult MediaTransmitter::forward_payload(span<const uint8_t> payload
   std::vector<uint8_t> data(payload.data() + sizeof(Header), payload.data() + sizeof(Header) + header.media_length);
   packet_receiver.receive_packet(srsran::RxPacket(seq_id, std::move(data)));
 
-  // cache latest 128 seq IDs (overwrite oldest when full)
-  seq_cache[seq_cache_index] = seq_id;
-  seq_cache_index = (seq_cache_index + 1) & 0x7F; // mod 128
-  if (seq_cache_count < 128) {
-    ++seq_cache_count;
-  }
   bool is_packet_loss_detected = false;
   const auto& sorted_packets = packet_receiver.get_sorted_packets(is_packet_loss_detected, lost_packet_counter);
-  if (is_packet_loss_detected) {
-    log_cached_seq_ids("Packet loss detected when processing sequence " + std::to_string(seq_id) + ", last "
-                       + std::to_string(seq_cache_count) + " seq ids: ");
-  }
+
   for (const auto& rx_packet : sorted_packets) {
     if (rx_packet.data.size() != 0) {
       ssize_t bytes_written = write(video_tunnel_out, rx_packet.data.data(), rx_packet.data.size());
@@ -502,21 +492,6 @@ bool MediaTransmitter::open_video_tunnel_in()
     return false;
   }
 }
-
-
-void MediaTransmitter::log_cached_seq_ids(const std::string &prefix)
-{
-  // std::ostringstream oss;
-  // oss << prefix;
-  // size_t start = (seq_cache_index + 128 - seq_cache_count) & 0x7F;
-  // for (size_t i = 0; i < seq_cache_count; ++i) {
-  //   size_t idx = (start + i) & 0x7F;
-  //   if (i) oss << ",";
-  //   oss << seq_cache[idx];
-  // }
-  // logger.warning("{}", oss.str());
-}
-
 
 bool MediaTransmitter::open_video_tunnel_out()
 {
