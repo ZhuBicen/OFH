@@ -292,9 +292,13 @@ public:
 
   void start()
   {
+    fmt::print("Starting transceiver\n");
     transceiver.start(*this);
+    fmt::print("Starting media transmitter\n");
     media_transmitter.start();
+    fmt::print("Starting packet sender\n");
     packet_sender.start();
+    fmt::print("Started done\n");
   }
 
   void print_statistics(unsigned emu_id)
@@ -375,7 +379,8 @@ struct worker_manager {
                                      {concurrent_queue_policy::lockfree_spsc, 2},
                                      {{exec_name}},
                                      std::chrono::microseconds{1},
-                                     os_thread_realtime_priority::max() - 1};
+                                     os_thread_realtime_priority::max() - 1,
+                                     os_sched_affinity_bitmask(4)};
       if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
         report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
       }
@@ -390,7 +395,8 @@ struct worker_manager {
                                      {concurrent_queue_policy::lockfree_spsc, task_worker_queue_size},
                                      {{exec_name}},
                                      std::chrono::microseconds{1},
-                                     os_thread_realtime_priority::max() - 2};
+                                     os_thread_realtime_priority::max() - 2,
+                                     os_sched_affinity_bitmask(5)};
       if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
         report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
       }
@@ -406,7 +412,8 @@ struct worker_manager {
                                      {concurrent_queue_policy::lockfree_spsc, 4},
                                      {{exec_name}},
                                      std::chrono::microseconds{1},
-                                     os_thread_realtime_priority::max() - 0};
+                                     os_thread_realtime_priority::max() - 0,
+                                     os_sched_affinity_bitmask(6)};
       if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
         report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
       }
@@ -422,7 +429,8 @@ struct worker_manager {
                                      {concurrent_queue_policy::lockfree_spsc, 4},
                                      {{exec_name}},
                                      std::chrono::microseconds{1},
-                                     os_thread_realtime_priority::max() - 0};
+                                     os_thread_realtime_priority::max() - 0,
+                                     os_sched_affinity_bitmask(7)};
       if (!exec_mng.add_execution_context(create_execution_context(dvb_worker))) {
         report_fatal_error("Failed to instantiate {} execution context", dvb_worker.name);
       }
@@ -520,8 +528,11 @@ int main(int argc, char** argv)
   std::unique_ptr<dpdk::dpdk_eal> eal;
   if (uses_dpdk) {
     // Prepend the application name in argv[0] as it is expected by EAL.
+    fmt::print("creating eal\n");
     eal = dpdk::create_dpdk_eal(std::string(argv[0]) + " " + dvb_tx_sim_parsed_cfg.dpdk_config->eal_args,
                                 srslog::fetch_basic_logger("EAL", false));
+    fmt::print("creating eal done\n");
+    
     if (!eal) {
       report_error("Failed to initialize DPDK EAL\n");
     }
@@ -543,7 +554,9 @@ int main(int argc, char** argv)
     port_cfg.pcie_id                     = dvb_tx_sim_cfg.network_interface;
     port_cfg.mtu_size                    = units::bytes{dvb_tx_sim_cfg.mtu};
     port_cfg.is_promiscuous_mode_enabled = dvb_tx_sim_cfg.enable_promiscuous;
+    fmt::print("Creating dpdk ctx\n");
     ctx                             = dpdk_port_context::create(port_cfg);
+    fmt::print("Createing dpdk ctx done\n");
     transceivers.push_back(std::make_unique<dpdk_transceiver>(logger, *workers.dvb_rx_exec, ctx));
   } else
 #endif
@@ -595,7 +608,7 @@ int main(int argc, char** argv)
   logger.info("input video tunnel {}", dvb_tx_sim_cfg.input_file);
   logger.info("output video tunnel {}", dvb_tx_sim_cfg.output_file);
   logger.info("------------------------------------------");
-  logger.info("version: 1");
+  logger.info("version: 2");
   logger.info("variable mtu? {}", emu_cfg.variable_mtu);
   logger.info("initial_num_of_packet {}", emu_cfg.initial_num_of_packet);
   logger.info("packet_delay_in_nano_seconds {}", emu_cfg.packet_delay_in_nano_seconds);
