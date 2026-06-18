@@ -37,34 +37,30 @@ static bool port_init(const dpdk_port_config& config, ::rte_mempool* mem_pool, u
 {
   uint16_t nb_rxd = RX_RING_SIZE;
   uint16_t nb_txd = TX_RING_SIZE;
-  fmt::print("port init {}\n", __LINE__);
+  
   if (::rte_eth_dev_is_valid_port(port_id) == 0) {
     fmt::print("DPDK - Invalid port id '{}'\n", port_id);
     return false;
   }
-  fmt::print("port init {}\n", __LINE__);
-
+  
   ::rte_eth_dev_info dev_info;
   int                ret = ::rte_eth_dev_info_get(port_id, &dev_info);
   if (ret != 0) {
     fmt::print("DPDK - Error getting Ethernet device information: {}\n", port_id, ::strerror(-ret));
     return false;
   }
-  fmt::print("port init {}\n", __LINE__);
-
+  
   ::rte_eth_conf port_conf = {};
   if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE) {
     port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
   }
-  fmt::print("port init {}\n", __LINE__);
-
+  
   // Configure the Ethernet device.
   if (::rte_eth_dev_configure(port_id, 1, 1, &port_conf) != 0) {
     fmt::print("DPDK - Error configuring Ethernet device\n");
     return false;
   }
-  fmt::print("port init {}\n", __LINE__);
-
+  
   // Configure MTU size.
   if (::rte_eth_dev_set_mtu(port_id, config.mtu_size.value()) != 0) {
     uint16_t current_mtu;
@@ -74,21 +70,18 @@ static bool port_init(const dpdk_port_config& config, ::rte_mempool* mem_pool, u
                current_mtu);
     return false;
   }
-  fmt::print("port init {}\n", __LINE__);
-
+  
   if (::rte_eth_dev_adjust_nb_rx_tx_desc(port_id, &nb_rxd, &nb_txd) != 0) {
     fmt::print("DPDK - Error configuring Ethernet device number of tx/rx descriptors\n");
     return false;
   }
-  fmt::print("port init {}\n", __LINE__);
-
+  
   // Allocate and set up 1 RX queue.
   if (::rte_eth_rx_queue_setup(port_id, 0, nb_rxd, ::rte_eth_dev_socket_id(port_id), nullptr, mem_pool) < 0) {
     fmt::print("DPDK - Error configuring Rx queue\n");
     return false;
   }
-  fmt::print("port init {}\n", __LINE__);
-
+  
   ::rte_eth_txconf txconf = dev_info.default_txconf;
   txconf.offloads         = port_conf.txmode.offloads;
   // Allocate and set up 1 TX queue.
@@ -96,14 +89,14 @@ static bool port_init(const dpdk_port_config& config, ::rte_mempool* mem_pool, u
     fmt::print("DPDK - Error configuring Tx queue\n");
     return false;
   }
-  fmt::print("port init {}, port id {}\n", __LINE__, port_id);
+  fmt::print("rte_eth_dev_start, port id {}\n", __LINE__, port_id);
 
   // Start Ethernet port.
   if (::rte_eth_dev_start(port_id) < 0) {
     fmt::print("DPDK - Error starting Ethernet device\n");
     return false;
   }
-  fmt::print("port init {}\n", __LINE__);
+  fmt::print("rte_eth_dev_start, port id {}, done\n", __LINE__, port_id);
 
   // Enable RX in promiscuous mode for the Ethernet device.
   if (config.is_promiscuous_mode_enabled) {
@@ -112,8 +105,7 @@ static bool port_init(const dpdk_port_config& config, ::rte_mempool* mem_pool, u
       return false;
     }
   }
-  fmt::print("port init {}\n", __LINE__);
-
+  
   return true;
 }
 
@@ -139,10 +131,8 @@ std::shared_ptr<dpdk_port_context> dpdk_port_context::create(const dpdk_port_con
 {
   // Create the mbuf pool only once as it is common for all ports.
   static ::rte_mempool* mem_pool = []() {
-    fmt::print("::rte_socket_id() {}\n", ::rte_socket_id());
     ::rte_mempool* pool =
         ::rte_pktmbuf_pool_create("OFH_MBUF_POOL", NUM_MBUFS, 0, 0, MAX_BUFFER_SIZE, ::rte_socket_id());
-    fmt::print("rte_mempool: {}\n", fmt::ptr(pool));
     if (pool == nullptr) {
       ::rte_exit(EXIT_FAILURE, "DPDK - Unable to create the DPDK mbuf pool\n");
     }

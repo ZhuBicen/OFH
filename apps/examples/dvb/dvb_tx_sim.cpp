@@ -528,10 +528,10 @@ int main(int argc, char** argv)
   std::unique_ptr<dpdk::dpdk_eal> eal;
   if (uses_dpdk) {
     // Prepend the application name in argv[0] as it is expected by EAL.
-    fmt::print("creating eal\n");
+    logger.info("creating eal");
     eal = dpdk::create_dpdk_eal(std::string(argv[0]) + " " + dvb_tx_sim_parsed_cfg.dpdk_config->eal_args,
                                 srslog::fetch_basic_logger("EAL", false));
-    fmt::print("creating eal done\n");
+    logger.info("creating eal done");
     
     if (!eal) {
       report_error("Failed to initialize DPDK EAL\n");
@@ -554,9 +554,9 @@ int main(int argc, char** argv)
     port_cfg.pcie_id                     = dvb_tx_sim_cfg.network_interface;
     port_cfg.mtu_size                    = units::bytes{dvb_tx_sim_cfg.mtu};
     port_cfg.is_promiscuous_mode_enabled = dvb_tx_sim_cfg.enable_promiscuous;
-    fmt::print("Creating dpdk ctx\n");
+    logger.info("Creating dpdk ctx");
     ctx                             = dpdk_port_context::create(port_cfg);
-    fmt::print("Createing dpdk ctx done\n");
+    logger.info("Createing dpdk ctx done");
     transceivers.push_back(std::make_unique<dpdk_transceiver>(logger, *workers.dvb_rx_exec, ctx));
   } else
 #endif
@@ -608,7 +608,7 @@ int main(int argc, char** argv)
   logger.info("input video tunnel {}", dvb_tx_sim_cfg.input_file);
   logger.info("output video tunnel {}", dvb_tx_sim_cfg.output_file);
   logger.info("------------------------------------------");
-  logger.info("version: 2");
+  logger.info("version: 3");
   logger.info("variable mtu? {}", emu_cfg.variable_mtu);
   logger.info("initial_num_of_packet {}", emu_cfg.initial_num_of_packet);
   logger.info("packet_delay_in_nano_seconds {}", emu_cfg.packet_delay_in_nano_seconds);
@@ -655,9 +655,9 @@ int main(int argc, char** argv)
         if (ctx) {
           memset(&dpdk_stats, 0, sizeof(dpdk_stats));
           rte_eth_stats_get(ctx->get_port_id(), &dpdk_stats);
-          fmt::print("dpdk rx num: {} tx num: {}\n", dpdk_stats.ipackets, dpdk_stats.opackets);
+          logger.info("dpdk rx num: {} tx num: {}", dpdk_stats.ipackets, dpdk_stats.opackets);
           if (dpdk_stats.ierrors != 0 || dpdk_stats.imissed != 0 || dpdk_stats.rx_nombuf != 0) {
-            fmt::print("dpdk error {} {} {} \n", dpdk_stats.ierrors, dpdk_stats.imissed, dpdk_stats.rx_nombuf);
+            logger.error("dpdk error {} {} {}", dpdk_stats.ierrors, dpdk_stats.imissed, dpdk_stats.rx_nombuf);
           }
           int len = rte_eth_xstats_get(ctx->get_port_id(), NULL, 0);
           if (len > 0) {
@@ -668,7 +668,7 @@ int main(int argc, char** argv)
               
               for (int j = 0; j < len; j++) {
                   if (xstats[j].value > 0) {
-                      fmt::print("{}: {}\n", xstats_names[j].name, xstats[j].value);
+                      logger.info("{}: {}\n", xstats_names[j].name, xstats[j].value);
                   }
               }
           }
